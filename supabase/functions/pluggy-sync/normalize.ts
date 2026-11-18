@@ -197,6 +197,13 @@ const GENERIC = /^(pix|ted|doc|transfer[eê]ncia|pagamento)(\s+(enviad[oa]|receb
 export type Skip = { external_id: string; reason: "unsupported_currency" | "invalid" | "zero" };
 
 const CARD_PAYMENT = /pagamento\s+(de\s+|da\s+)?fatura|payment|bill payment/i;
+// A credit on a card that speaks of a payment is the bill being paid (the
+// bank's "Pagamento recebido"), unless the text says the money was given
+// back. Read as a refund it would lower spending, the reconciliation would
+// never see the card's side of the bill payment (it skips refunds there),
+// and a purchase of the same amount could be taken as paid and refunded.
+const CARD_CREDIT_PAID = /\b(pagamento|pagto|pgto)\b/i;
+const GIVEN_BACK = /estorno|devolu|devolvid|cancelad|reembolso/i;
 // Only strong evidence of moving money between the person's own accounts.
 // A Pix or TED alone is often a purchase or a salary: defaulting it to a
 // transfer would hide spending or income, so it stays expense/income.
@@ -227,7 +234,11 @@ export function toSuggestion(
   const text = `${tx.description} ${tx.category ?? ""} ${tx.operationType ?? ""}`;
   let kind: Suggestion["kind"];
   if (tx.type === "DEBIT") kind = OWN_TRANSFER.test(text) && !credit ? "transfer" : "expense";
-  else if (credit) kind = CARD_PAYMENT.test(text) ? "transfer" : "refund";
+  else if (credit) {
+    const paid = CARD_PAYMENT.test(text) ||
+      (CARD_CREDIT_PAID.test(`${tx.description ?? ""} ${tx.descriptionRaw ?? ""}`) && !GIVEN_BACK.test(text));
+    kind = paid ? "transfer" : "refund";
+  }
   else kind = OWN_TRANSFER.test(text) ? "transfer" : "income";
   const meta = tx.creditCardMetadata;
   const pay = tx.paymentData ?? null;

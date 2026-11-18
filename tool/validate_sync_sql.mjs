@@ -921,6 +921,105 @@ try {
     await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [conn.id]));
     assert.deepEqual(await service('nexo_mcp_bank_movements', [conn.id, 0, 9007199254740991]), [], 'a revoked connector reads nothing');
   });
+  // ── Audit of 18/11/2026: bank data only for the real dataset; deleting a dataset ──
+  const auditSql = await readFile(new URL('../supabase/migrations/202611180002_audit.sql', import.meta.url), 'utf8');
+  const C = '33333333-3333-4333-8333-333333333333';
+  const forever = 9007199254740991;
+  const connectorOf = async (who, datasetId, label) => {
+    const made = await user(who, tx => rpc(tx, 'nexo_mcp_create_connector', [datasetId, label]));
+    return (await db.query(`select id, dataset_id from nexo_mcp_private.connectors
+      where token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, [made.token])).rows[0];
+  };
+  const naming = async (datasetId) => {
+    const count = async (table) => (await db.query(
+      `select count(*)::int n from ${table} where dataset_id = $1`, [datasetId])).rows[0].n;
+    return { commands: await count('nexo_mcp_private.commands'), capabilities: await count('nexo_mcp_private.capabilities'),
+      push_tokens: await count('nexo_mcp_private.push_tokens'), connectors: await count('nexo_mcp_private.connectors'),
+      devices: await count('nexo_sync_lab_private.devices'),
+      datasets: (await db.query('select count(*)::int n from nexo_sync_lab_private.datasets where id = $1', [datasetId])).rows[0].n };
+  };
+  const audit = { doomed: randomUUID(), kept: randomUUID() };
+  await test('audit: before the fix, a test connector read the bank data and a dataset with requests could not be deleted', async () => {
+    await db.query(`update nexo_mcp_private.connectors set revoked_at = now() where owner_id = $1 and revoked_at is null`, [A]);
+    audit.synthetic = await connectorOf(A, ds2, 'Claude de teste');
+    audit.realId = (await db.query(`select id from nexo_sync_lab_private.datasets
+      where owner_id = $1 and not synthetic_only`, [A])).rows[0].id;
+    audit.real = await connectorOf(A, audit.realId, 'Claude real');
+    // ds2 is a synthetic dataset; the bank movements belong to the person.
+    assert.ok((await service('nexo_mcp_suggestions', [audit.synthetic.id, 50])).some(r => r.id === 'pluggy:n2'));
+    // A third person with a real dataset, a test dataset and everything the assistant keeps for each.
+    for (const [id, real] of [[audit.doomed, true], [audit.kept, false]]) {
+      const device = randomUUID();
+      await user(C, tx => rpc(tx, 'nexo_sync_open', [id, randomUUID(), device, real]));
+      const conn = await connectorOf(C, id, real ? 'Claude' : 'Claude de teste');
+      await user(C, tx => rpc(tx, 'nexo_mcp_report_device', [id, device, '1.17.0+59', ['transaction.add'], '{}']));
+      await user(C, tx => rpc(tx, 'nexo_push_register', [id, device, `fcm_${real ? 'a' : 'b'}${'c'.repeat(60)}`]));
+      await service('nexo_mcp_enqueue_v3', [conn.id, 'transaction.add', JSON.stringify({ amount_cents: 100 }), `audit-${real}`, null]);
+      await service('nexo_mcp_audit', [conn.id, 'get_accounts', true]);
+    }
+    const full = { commands: 1, capabilities: 1, push_tokens: 1, connectors: 1, devices: 1, datasets: 1 };
+    assert.deepEqual(await naming(audit.doomed), full);
+    // The request points at the connector: the delete was refused whole.
+    await denies(() => user(C, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.doomed])), '23503');
+    assert.deepEqual(await naming(audit.doomed), full);
+  });
+  await db.exec(auditSql);
+  await test('audit SEC-06: bank data is read and changed only through a connector of the real dataset', async () => {
+    const { synthetic, real } = audit;
+    for (const [name, args] of [['nexo_mcp_suggestions', [synthetic.id, 50]], ['nexo_mcp_bank_movements', [synthetic.id, 0, forever]],
+      ['nexo_mcp_bank_accounts', [synthetic.id]], ['nexo_mcp_bank_status', [synthetic.id]]]) {
+      assert.deepEqual(await service(name, args), [], `${name}: a test connector sees no bank data`);
+    }
+    assert.equal(await service('nexo_mcp_ignore_suggestions', [synthetic.id, null, forever]), 0);
+    assert.equal(await service('nexo_mcp_ignore_suggestions', [synthetic.id, ['pluggy:n2'], null]), 0);
+    assert.equal(await service('nexo_mcp_link_bank_account', [synthetic.id, 'acc-1', 'outra-conta']), 0);
+    // Nothing changed, and the connector of the real dataset works as before.
+    const pending = await service('nexo_mcp_suggestions', [real.id, 50]);
+    const n2 = pending.find(r => r.id === 'pluggy:n2');
+    assert.deepEqual([n2.direction, n2.counterparty, n2.nexo_account_id], ['out', 'Loja Exemplo', 'main']);
+    const all = await service('nexo_mcp_bank_movements', [real.id, 0, forever]);
+    assert.ok(all.length > pending.length && all.some(r => r.review === 'confirmed'));
+    assert.equal((await service('nexo_mcp_bank_accounts', [real.id])).find(a => a.account_id === 'acc-1').nexo_account_id, 'main');
+    assert.ok((await service('nexo_mcp_bank_status', [real.id])).some(b => b.bank === 'Banco fictício'));
+    assert.equal(await service('nexo_mcp_link_bank_account', [real.id, 'acc-1', 'main']), 1);
+    assert.equal(await service('nexo_mcp_ignore_suggestions', [real.id, ['pluggy:n2'], null]), 1);
+    assert.ok(!(await service('nexo_mcp_suggestions', [real.id, 50])).some(r => r.id === 'pluggy:n2'));
+    // The same refusals as before: nothing selected, another person, a revoked connector, the app's roles.
+    await denies(() => service('nexo_mcp_ignore_suggestions', [real.id, null, null]), '22023');
+    await denies(() => service('nexo_mcp_ignore_suggestions', [synthetic.id, null, null]), '22023');
+    const other = (await db.query(`select id from nexo_mcp_private.connectors
+      where owner_id = $1 and dataset_id = $2 and revoked_at is null`, [C, audit.doomed])).rows[0];
+    assert.deepEqual(await service('nexo_mcp_suggestions', [other.id, 50]), [], 'a real dataset of another person sees nothing of this one');
+    assert.equal(await service('nexo_mcp_link_bank_account', [other.id, 'acc-1', 'x']), 0);
+    for (const role of ['anon', 'authenticated']) {
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_suggestions', [real.id, 50]), role), '42501');
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_bank_accounts', [real.id]), role), '42501');
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_bank_status', [real.id]), role), '42501');
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_ignore_suggestions', [real.id, null, forever]), role), '42501');
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_link_bank_account', [real.id, 'acc-1', 'y']), role), '42501');
+    }
+    await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [real.id]));
+    assert.deepEqual(await service('nexo_mcp_bank_accounts', [real.id]), [], 'a revoked connector reads nothing');
+    await denies(() => service('nexo_mcp_ignore_suggestions', [real.id, null, forever]), '42501');
+  });
+  await test('audit SEC-07: deleting a dataset takes its requests, device reports and push tokens, and nothing else', async () => {
+    const full = { commands: 1, capabilities: 1, push_tokens: 1, connectors: 1, devices: 1, datasets: 1 };
+    await denies(() => user(B, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.doomed])), '42501');
+    await denies(() => user(null, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.doomed]), 'anon'), '42501');
+    assert.deepEqual(await naming(audit.doomed), full);
+    await user(C, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.doomed]));
+    assert.deepEqual(await naming(audit.doomed), { commands: 0, capabilities: 0, push_tokens: 0, connectors: 0, devices: 0, datasets: 0 });
+    assert.equal((await db.query(`select count(*)::int n from nexo_mcp_private.audit a
+      where not exists (select 1 from nexo_mcp_private.connectors k where k.id = a.connector_id)`)).rows[0].n, 0);
+    // The other dataset of the same person is whole, and a new real one can be opened.
+    assert.deepEqual(await naming(audit.kept), full);
+    await user(C, tx => rpc(tx, 'nexo_sync_open', [randomUUID(), randomUUID(), randomUUID(), true]));
+    await denies(() => user(C, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.doomed])), '42501');
+    // The file can be applied again: it only replaces functions.
+    await db.exec(auditSql);
+    await user(C, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.kept]));
+    assert.equal((await naming(audit.kept)).datasets, 0);
+  });
   await test('security sweep: no table of any Nexo schema is readable by another person or anonymously', async () => {
     const tables = (await db.query(`select table_schema, table_name from information_schema.tables
       where table_type = 'BASE TABLE' and (table_schema like 'nexo%' or table_schema = 'public')`)).rows;

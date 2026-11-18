@@ -1,7 +1,7 @@
 // Read-only Nexo tools. Every number comes from the synchronized ledger; when
 // something is unknown (another currency, no data) the answer says so.
 import {
-  analyze, cents, currencyOf, day, isNeutral, isoDay, type Ledger, meta, metadataIndex,
+  analyze, cents, currencyOf, day, isCalendarDay, isNeutral, isoDay, type Ledger, meta, metadataIndex,
   money, monthFilter, num, previousMonth, type Row, text,
 } from "./finance.ts";
 import { countryOf, FX_SCALE, position } from "./portfolio.ts";
@@ -119,8 +119,8 @@ function only(args: Args, allowed: string[]) {
 }
 function date(args: Args, key: string, fallback?: string): string {
   const v = args[key] ?? fallback;
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(v))) {
-    throw new ToolInputError(`Data inválida em ${key}; use AAAA-MM-DD.`);
+  if (!isCalendarDay(v)) {
+    throw new ToolInputError(`Data inválida em ${key}; use uma data que existe, AAAA-MM-DD.`);
   }
   return v;
 }

@@ -2,7 +2,7 @@
 // categories, goals, investments, loans, money lent, assets and the
 // wishlist. Reads come from the synced ledger; changes are requests the app
 // applies with its own rules (the same calls as its screens).
-import { cents, day, type Ledger, money, num, type Row, text } from "./finance.ts";
+import { cents, day, isCalendarDay, type Ledger, money, num, type Row, text } from "./finance.ts";
 import { balanceCents, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { cardInvoices } from "./invoices.ts";
 import { countryOf, FX_SCALE, position } from "./portfolio.ts";
@@ -258,8 +258,8 @@ function dateArg(args: Args, key: string, required = false): string | undefined 
     if (required) throw new ToolInputError(`${key} é obrigatório (AAAA-MM-DD).`);
     return undefined;
   }
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(`${v}T00:00:00Z`))) {
-    throw new ToolInputError(`${key} deve estar no formato AAAA-MM-DD.`);
+  if (!isCalendarDay(v)) {
+    throw new ToolInputError(`${key} deve ser uma data que existe, no formato AAAA-MM-DD.`);
   }
   return v;
 }

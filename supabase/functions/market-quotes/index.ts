@@ -2,7 +2,7 @@
 // The caller is identified by their own Supabase session and must be the
 // owner; the Finnhub key comes from the function secrets and never reaches
 // the app, the response or the logs. The request carries tickers only.
-import { quotes, RateLimited, symbols } from "./quotes.ts";
+import { quotes, RateLimited, type Round, symbols } from "./quotes.ts";
 import { backfillUrl, closesFromQuotes, historySymbol, parseAlphaVantage } from "./history.ts";
 
 declare const Deno: {
@@ -117,14 +117,16 @@ Deno.serve(async (request) => {
     return json(400, { error: "bad_symbols" });
   }
   try {
-    const found = await quotes(list, key, (u) => fetch(u, { redirect: "error" }), Date.now());
+    const round: Round = {};
+    const found = await quotes(list, key, (u) => fetch(u, { redirect: "error" }), Date.now(), round);
     // Each quote is also the day's close, for the chart. Never delays the answer.
     const closes = closesFromQuotes(found);
     if (closes.length > 0) {
       const keep = rpc("nexo_market_store", { p_rows: closes, p_source: "quote" }).catch(() => {});
       if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(keep);
     }
-    return json(200, { quotes: found });
+    // The limit in the middle of the list: what came is still an answer.
+    return json(200, round.limited ? { quotes: found, rate_limited: true } : { quotes: found });
   } catch (error) {
     if (error instanceof RateLimited) return json(429, { error: "rate_limited" });
     // Only a code: the provider URL carries the key.

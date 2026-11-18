@@ -15,30 +15,58 @@ export class PluggyError extends Error {
 
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
+/// One request to Pluggy may take this long; a bank that never answers must
+/// not hold the whole refresh (the function itself has a time limit).
+export const requestTimeoutMs = 20_000;
+
 export class PluggyClient {
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly fetcher: Fetch;
   private readonly base: string;
+  private readonly timeoutMs: number;
   private apiKey: string | null = null;
 
-  constructor(clientId: string, clientSecret: string, fetcher: Fetch = fetch, base = "https://api.pluggy.ai") {
+  constructor(clientId: string, clientSecret: string, fetcher: Fetch = fetch, base = "https://api.pluggy.ai",
+    timeoutMs = requestTimeoutMs) {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.fetcher = fetcher;
     this.base = base;
+    this.timeoutMs = timeoutMs;
+  }
+
+  /// Every request has a time limit and follows no redirect. No answer in
+  /// time (504) or no connection (503) is a failure of this read, like any
+  /// other answer of Pluggy: the caller marks the bank and goes on.
+  private async send(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetcher(url, { ...init, redirect: "error", signal: AbortSignal.timeout(this.timeoutMs) });
+    } catch (error) {
+      const late = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      throw new PluggyError(late ? 504 : 503, true);
+    }
+  }
+
+  /// The body also has to arrive in time and be JSON.
+  private async body<T>(response: Response): Promise<T> {
+    try {
+      return await response.json() as T;
+    } catch (error) {
+      const late = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      throw new PluggyError(late ? 504 : 502, true);
+    }
   }
 
   private async auth(): Promise<string> {
-    const response = await this.fetcher(`${this.base}/auth`, {
+    const response = await this.send(`${this.base}/auth`, {
       method: "POST",
-      redirect: "error",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientId: this.clientId, clientSecret: this.clientSecret }),
     });
     if (!response.ok) throw new PluggyError(response.status, response.status >= 500);
-    const body = await response.json() as { apiKey?: unknown };
-    if (typeof body.apiKey !== "string") throw new PluggyError(502, true);
+    const body = await this.body<{ apiKey?: unknown }>(response);
+    if (typeof body?.apiKey !== "string") throw new PluggyError(502, true);
     return (this.apiKey = body.apiKey);
   }
 
@@ -46,8 +74,7 @@ export class PluggyClient {
   private async get<T>(path: string): Promise<T> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const key = this.apiKey ?? await this.auth();
-      const response = await this.fetcher(`${this.base}${path}`, {
-        redirect: "error",
+      const response = await this.send(`${this.base}${path}`, {
         headers: { "X-API-KEY": key, Accept: "application/json" },
       });
       if (response.status === 401 && attempt === 0) {
@@ -57,7 +84,7 @@ export class PluggyClient {
       if (!response.ok) {
         throw new PluggyError(response.status, response.status === 429 || response.status >= 500);
       }
-      return await response.json() as T;
+      return await this.body<T>(response);
     }
     throw new PluggyError(401, false);
   }

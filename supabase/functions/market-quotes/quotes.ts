@@ -43,7 +43,15 @@ export class RateLimited extends Error {
   }
 }
 
-export async function quotes(list: string[], key: string, fetcher: Fetcher, nowMs: number): Promise<Quote[]> {
+/// What a round could not finish: the provider's limit came in the middle.
+export type Round = { limited?: boolean };
+
+/// The provider's limit in the middle of the list does not throw away what
+/// already came: those quotes are returned (and [round] says the list is
+/// incomplete), the provider is not asked again in this round, and what is
+/// still in the cache is used. Only a round with nothing at all is refused.
+export async function quotes(list: string[], key: string, fetcher: Fetcher, nowMs: number,
+  round: Round = {}): Promise<Quote[]> {
   const out: Quote[] = [];
   for (const symbol of list) {
     const hit = cache.get(symbol);
@@ -51,14 +59,19 @@ export async function quotes(list: string[], key: string, fetcher: Fetcher, nowM
       if (hit.quote) out.push(hit.quote);
       continue;
     }
+    if (round.limited) continue;
     const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`;
     const response = await fetcher(url);
-    if (response.status === 429) throw new RateLimited();
+    if (response.status === 429) {
+      round.limited = true;
+      continue;
+    }
     if (response.status !== 200) continue;
     const quote = parse(symbol, await response.json(), nowMs);
     cache.set(symbol, { at: nowMs, quote });
     if (quote) out.push(quote);
   }
+  if (round.limited && out.length === 0) throw new RateLimited();
   return out;
 }
 

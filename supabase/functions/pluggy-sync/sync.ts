@@ -79,8 +79,9 @@ export async function syncOwner(owner: string, source: Source, store: Store,
             cardBills.set(account.id, rows);
             bills.push(rows.length);
           } catch (error) {
-            if (!(error instanceof PluggyError)) throw error;
-            bills.push(error.message);
+            // Official invoices are a check, never required: whatever went
+            // wrong with them, the movements are still read.
+            bills.push(failureCode(error));
           }
         }
         const txs = await source.transactions(account.id, dateFrom);
@@ -93,39 +94,69 @@ export async function syncOwner(owner: string, source: Source, store: Store,
         }
       }
     } catch (error) {
-      if (!(error instanceof PluggyError)) throw error;
+      // Whatever failed (Pluggy's answer, the network, a time limit, data in
+      // a shape nobody expected), it failed for this bank only: it is
+      // marked and the others are still read.
+      const missing = error instanceof PluggyError && error.status === 404;
       health = {
-        state: error.status === 404 ? "reconnect" : "error",
-        message: error.status === 404
+        state: missing ? "reconnect" : "error",
+        message: missing
           ? "Conexão não encontrada no Pluggy. Confira o identificador ou reconecte pelo Meu Pluggy."
-          : `Não foi possível ler este banco agora (${error.message}). Os dados já recebidos continuam.`,
+          : `Não foi possível ler este banco agora (${failureCode(error)}). Os dados já recebidos continuam.`,
       };
-      await store.store(owner, item.item_id, health, []);
+      try {
+        await store.store(owner, item.item_id, health, []);
+      } catch {
+        // The result below still tells the app; the next read tries again.
+      }
       results.push({ item_id: item.item_id, label: item.label, health, fetched: false, written: 0, skipped: 0 });
       continue;
     }
-    const known = new Map<string, Stored>();
-    for (let i = 0; i < incoming.length; i += 500) {
-      for (const s of await store.stored(owner, incoming.slice(i, i + 500).map((r) => r.external_id))) {
-        known.set(s.external_id, s);
+    try {
+      const known = new Map<string, Stored>();
+      for (let i = 0; i < incoming.length; i += 500) {
+        for (const s of await store.stored(owner, incoming.slice(i, i + 500).map((r) => r.external_id))) {
+          known.set(s.external_id, s);
+        }
       }
+      const rows: Row[] = [];
+      for (const s of incoming) {
+        const { action, row } = merge(known.get(s.external_id), s);
+        if (action !== "keep") rows.push({ ...row, action });
+      }
+      let written = 0;
+      for (let i = 0; i < Math.max(rows.length, 1); i += 500) {
+        written += await store.store(owner, item.item_id, health, rows.slice(i, i + 500));
+      }
+      if (store.accounts) await store.accounts(owner, item.item_id, updatedAt, snapshots);
+      // After the accounts: each bill belongs to a stored card.
+      if (store.bills) for (const [accountId, rows] of cardBills) await store.bills(owner, accountId, rows);
+      results.push({
+        item_id: item.item_id, label: item.label, health, fetched: true, written, skipped,
+        bills: bills.length ? bills : undefined,
+      });
+    } catch (error) {
+      // Read, but not kept (the database refused or did not answer): the
+      // same, for this bank only. Storing is idempotent, so the next read
+      // stores what is missing.
+      results.push({
+        item_id: item.item_id, label: item.label, fetched: false, written: 0, skipped,
+        health: {
+          state: "error",
+          message: `Os dados deste banco foram lidos, mas não puderam ser guardados agora (${failureCode(error)}). Tente de novo mais tarde.`,
+        },
+      });
     }
-    const rows: Row[] = [];
-    for (const s of incoming) {
-      const { action, row } = merge(known.get(s.external_id), s);
-      if (action !== "keep") rows.push({ ...row, action });
-    }
-    let written = 0;
-    for (let i = 0; i < Math.max(rows.length, 1); i += 500) {
-      written += await store.store(owner, item.item_id, health, rows.slice(i, i + 500));
-    }
-    if (store.accounts) await store.accounts(owner, item.item_id, updatedAt, snapshots);
-    // After the accounts: each bill belongs to a stored card.
-    if (store.bills) for (const [accountId, rows] of cardBills) await store.bills(owner, accountId, rows);
-    results.push({
-      item_id: item.item_id, label: item.label, health, fetched: true, written, skipped,
-      bills: bills.length ? bills : undefined,
-    });
   }
   return results;
+}
+
+/// A short code for what went wrong, never the text of the error (it may
+/// carry an address or data): the code of Pluggy or of the database call
+/// when the error is only that, otherwise a plain word.
+function failureCode(error: unknown): string {
+  if (error instanceof PluggyError) return error.message;
+  if (!(error instanceof Error)) return "falha inesperada";
+  if (error.name === "TimeoutError" || error.name === "AbortError") return "tempo esgotado";
+  return /^[a-z_0-9]{1,40}$/.test(error.message) ? error.message : "falha inesperada";
 }

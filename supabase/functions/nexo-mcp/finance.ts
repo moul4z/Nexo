@@ -49,6 +49,14 @@ export const num = (v: unknown): number => (typeof v === "number" && isFinite(v)
 export const cents = (amount: number): number => Math.round(amount * 100);
 export const day = (iso: string): string => iso.slice(0, 10);
 
+/// A day that exists, as AAAA-MM-DD. The engine alone accepts 2026-02-30
+/// (it rolls over to March 2), so the day is rebuilt and compared.
+export function isCalendarDay(v: unknown): v is string {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const ms = Date.parse(`${v}T00:00:00Z`);
+  return !isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === v;
+}
+
 export function meta(row: Row | undefined): Meta {
   const int = (v: unknown) => (typeof v === "number" ? v : null);
   return {

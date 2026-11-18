@@ -1,7 +1,9 @@
 // More things the assistant can read and request: recurring items, budgets,
 // categories, savings goals and card invoices. Requests are applied by the
 // app with its own rules; reads come from the synced ledger.
-import { cents, currencyOf, day, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text } from "./finance.ts";
+import {
+  cents, currencyOf, day, isCalendarDay, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text,
+} from "./finance.ts";
 import { ToolInputError, type ToolDefinition } from "./tools.ts";
 import { sharedSettings } from "./settings.ts";
 
@@ -241,8 +243,8 @@ function dateArg(args: Args, key: string, required = false): string | undefined 
     if (required) throw new ToolInputError(`${key} é obrigatório (AAAA-MM-DD).`);
     return undefined;
   }
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(`${v}T00:00:00Z`))) {
-    throw new ToolInputError(`${key} deve estar no formato AAAA-MM-DD.`);
+  if (!isCalendarDay(v)) {
+    throw new ToolInputError(`${key} deve ser uma data que existe, no formato AAAA-MM-DD.`);
   }
   return v;
 }

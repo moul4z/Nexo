@@ -341,4 +341,93 @@ await test('sync: stores official invoices of cards after the accounts; a refusa
   assert.equal(plain.bills, undefined);
 });
 
+// ── Audit of 18/11/2026 ────────────────────────────────────────────────
+await test('audit PLG-02: "Pagamento recebido" on a card is the bill being paid, never a refund', async () => {
+  const cardIn = (description, over = {}) => toSuggestion(tx({ accountId: 'acc-card', type: 'CREDIT', amount: 350, description, ...over }), card);
+  assert.deepEqual([cardIn('Pagamento recebido').kind, cardIn('Pagamento recebido').direction], ['transfer', 'in']);
+  assert.equal(cardIn('PAGTO EFETUADO').kind, 'transfer');
+  // Money given back stays a refund, whatever else the text says.
+  for (const text of ['Estorno de pagamento', 'Pagamento devolvido', 'Reembolso Loja Exemplo', 'Crédito Loja Exemplo']) {
+    assert.equal(cardIn(text).kind, 'refund', text);
+  }
+  // The bank's side keeps its kind: "fatura" also names the light bill, and
+  // the reconciliation knows a card bill by its text, whatever the kind.
+  assert.equal(toSuggestion(tx({ description: 'Pagamento de fatura' }), bank).kind, 'expense');
+  assert.equal(toSuggestion(tx({ description: 'Pagamento fatura de luz' }), bank).kind, 'expense');
+
+  // With the rule of the app: a purchase and, two days later, the bill paid
+  // with the same amount from a bank that is not connected.
+  const { reconcile } = await import('../supabase/functions/nexo-mcp/reconcile.ts');
+  const movement = (s) => ({ id: s.external_id, amountCents: s.amount_cents, kind: s.kind, medium: s.medium,
+    description: s.description, occurredAt: s.occurred_at, direction: s.direction, accountId: s.account_external_id,
+    nexoAccountId: null, operationRef: s.operation_ref, paymentRef: s.payment_ref, sameOwner: s.same_owner,
+    counterparty: s.counterparty });
+  const purchase = toSuggestion(tx({ id: 'compra', accountId: 'acc-card', amount: 350, description: 'Loja Exemplo',
+    date: '2026-11-14T15:00:00.000Z' }), card);
+  const paid = cardIn('Pagamento recebido', { id: 'pago', date: '2026-11-16T15:00:00.000Z' });
+  const options = { creditAccounts: new Set(['cartao']), now: Date.parse('2026-11-18T12:00:00Z') };
+  const byId = (list) => Object.fromEntries(list.map((m) => [m.id, [m.resolution, m.automatic]]));
+  assert.deepEqual(byId(reconcile([purchase, paid].map(movement), [], options)),
+    { 'pluggy:compra': ['newEntry', false], 'pluggy:pago': ['invoicePayment', false] });
+  // What the old kind did: both left the queue by themselves, and the
+  // purchase never became spending.
+  assert.deepEqual(byId(reconcile([purchase, { ...paid, kind: 'refund' }].map(movement), [], options)),
+    { 'pluggy:compra': ['reversal', true], 'pluggy:pago': ['reversal', true] });
+});
+
+await test('audit PLG-03: a request to Pluggy has a time limit, and no answer is a failure of that read', async () => {
+  const { requestTimeoutMs } = await import('../supabase/functions/pluggy-sync/pluggy.ts');
+  assert.ok(requestTimeoutMs > 0 && requestTimeoutMs <= 30000);
+  const api = fakeApi((url) => url.endsWith('/auth') ? json({ apiKey: 'k' }) : json({ results: [bank] }));
+  await new PluggyClient('id', 'secret', api.fetcher, 'https://api.example').accounts('item-1');
+  assert.ok(api.calls.every((c) => c.init.signal instanceof AbortSignal), 'auth and reads carry a time limit');
+  // A bank that never answers: the signal ends the wait. (The timer of the
+  // signal does not keep Node alive by itself; the test's own timer does.)
+  const stuck = (_url, init) => new Promise((_resolve, reject) => {
+    const alive = setTimeout(() => reject(new Error('the time limit never came')), 5000);
+    init.signal.addEventListener('abort', () => { clearTimeout(alive); reject(init.signal.reason); });
+  });
+  const slow = new PluggyClient('id', 'secret', stuck, 'https://api.example', 20);
+  await assert.rejects(slow.accounts('item-1'), (e) => e instanceof PluggyError && e.status === 504 && e.retryable);
+  // No connection, or an answer that is not JSON: also a failure of this read.
+  const down = new PluggyClient('id', 'secret', async () => { throw new TypeError('fetch failed'); }, 'https://api.example');
+  await assert.rejects(down.accounts('item-1'), (e) => e instanceof PluggyError && e.status === 503 && e.retryable);
+  const html = new PluggyClient('id', 'secret', fakeApi((url) => url.endsWith('/auth') ? json({ apiKey: 'k' })
+    : new Response('<html>', { status: 200 })).fetcher, 'https://api.example');
+  await assert.rejects(html.accounts('item-1'), (e) => e instanceof PluggyError && e.status === 502);
+});
+
+await test('audit PLG-03: whatever fails in one bank, the others are still read', async () => {
+  const items = [{ item_id: 'item-quebrado', label: 'Banco A', last_fetch_at: null },
+    { item_id: 'item-1', label: 'Banco B', last_fetch_at: null }];
+  const broken = (failure) => ({ ...source([tx({ id: 'ok' })]),
+    accounts: async (itemId) => { if (itemId === 'item-quebrado') throw failure; return [bank]; } });
+  for (const [failure, code] of [[new TypeError('fetch failed: https://api.example/accounts?itemId=segredo'), 'falha inesperada'],
+    [new DOMException('The operation timed out.', 'TimeoutError'), 'tempo esgotado'], [new PluggyError(500, true), 'pluggy_500']]) {
+    const store = fakeStore(items);
+    const [a, b] = await syncOwner('owner', broken(failure), store, { now });
+    assert.deepEqual([a.fetched, a.health.state], [false, 'error']);
+    assert.ok(a.health.message.includes(code), a.health.message);
+    assert.ok(!a.health.message.includes('segredo'), 'only a code, never the text of the error');
+    assert.deepEqual([b.fetched, b.written], [true, 1], 'the next bank is read');
+    assert.deepEqual(store.healths, [['item-quebrado', 'error'], ['item-1', 'ok']]);
+  }
+  // The invoices of a card are a check: an unexpected failure there does not stop the movements.
+  const store = fakeStore([items[1]]);
+  const withBills = { ...source([tx({ id: 'c' })]), accounts: async () => [bank, card],
+    bills: async () => { throw new TypeError('fetch failed'); } };
+  const [r] = await syncOwner('owner', withBills, store, { now });
+  assert.deepEqual([r.fetched, r.bills], [true, ['falha inesperada']]);
+  // Read but not kept (the database refused): the same, for that bank only.
+  const picky = fakeStore(items);
+  const keep = picky.store;
+  picky.store = async (o, itemId, health, rows) => {
+    if (itemId === 'item-quebrado') throw new Error('rpc_500');
+    return keep(o, itemId, health, rows);
+  };
+  const [first, second] = await syncOwner('owner', source([tx({ id: 'd' })]), picky, { now });
+  assert.deepEqual([first.fetched, first.health.state, second.fetched, second.written], [false, 'error', true, 1]);
+  assert.match(first.health.message, /não puderam ser guardados agora \(rpc_500\)/, 'the code of the database call, for whoever looks into it');
+});
+
 console.log(`PLUGGY: ${passed} tests passed; synthetic data only.`);

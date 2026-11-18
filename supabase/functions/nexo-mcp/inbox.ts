@@ -9,6 +9,12 @@ import { sharedSettings } from "./settings.ts";
 type Raw = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : null);
 
+/// The day of a bank movement as the person reads it: Brasília (UTC−3, no
+/// daylight saving), the same day reconcile.ts compares (movementDay). One
+/// place, so the list, the previews and the duplicate checks never disagree.
+export const movementDate = (ms: number): string =>
+  Number.isFinite(ms) && Math.abs(ms) < 8.64e15 ? new Date(ms - 3 * 3600000).toISOString().slice(0, 10) : "";
+
 export function toMovement(s: Raw): Movement {
   return {
     id: String(s.id),
@@ -137,7 +143,7 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
   const row = (s: Raw) => {
     const m = match.get(String(s.id))!;
     return {
-      id: s.id, bank: s.bank, date: new Date(Number(s.occurred_at) - 3 * 3600000).toISOString().slice(0, 10),
+      id: s.id, bank: s.bank, date: movementDate(Number(s.occurred_at)),
       amount: money(Number(s.amount_cents)), kind: s.kind, medium: s.medium === "credit" ? "cartão" : "conta",
       direction: s.direction === "in" ? "entrada" : s.direction === "out" ? "saída" : undefined,
       description: s.description, counterparty: str(s.counterparty) ?? undefined,

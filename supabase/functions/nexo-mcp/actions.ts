@@ -2,12 +2,14 @@
 // a request that one of the person's devices applies with the app's own
 // rules (balances, cards, transfers). The answer says "pendente" until the
 // app confirms; get_request_status tells the outcome.
-import { analyze, cents, day, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text } from "./finance.ts";
+import {
+  analyze, cents, day, isCalendarDay, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text,
+} from "./finance.ts";
 import { callTool, cardLimitAlerts, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { callMoreAction, moreActions } from "./more_actions.ts";
 import { allActions, callAllAction } from "./all_actions.ts";
 import { callParityAction, extendedTransactionEdit, parityActions } from "./parity_actions.ts";
-import { classify, describe } from "./inbox.ts";
+import { classify, describe, movementDate } from "./inbox.ts";
 
 export interface Request {
   id: string;
@@ -181,7 +183,8 @@ const baseActions: (ToolDefinition & { destructive?: boolean })[] = [
     name: "add_transfer",
     title: "Transferir entre contas",
     description:
-      "Move dinheiro entre duas contas da pessoa (não é gasto nem receita). Use também para pagar fatura de cartão a partir de uma conta.",
+      "Move dinheiro entre duas contas da pessoa (não é gasto nem receita). Para pagar fatura de cartão use pay_card_invoice: " +
+      "uma transferência para o cartão muda o saldo dele, mas não dá baixa na fatura.",
     inputSchema: {
       type: "object",
       properties: {
@@ -278,7 +281,8 @@ const baseActions: (ToolDefinition & { destructive?: boolean })[] = [
     name: "ignore_suggestions",
     title: "Ignorar sugestões",
     description:
-      "Descarta sugestões do Open Finance sem lançar nada: por ids, ou todas anteriores a uma data. Não mexe em saldos.",
+      "Descarta sugestões do Open Finance sem lançar nada: por ids, todas anteriores a uma data, ou as duas coisas juntas " +
+      "(os ids e também as anteriores à data). Não mexe em saldos. preview mostra antes o que sairia.",
     inputSchema: {
       type: "object",
       properties: {
@@ -322,6 +326,9 @@ const baseActions: (ToolDefinition & { destructive?: boolean })[] = [
 
 type Args = Record<string, unknown>;
 
+/// How many pending suggestions one read brings (the server's own limit).
+const previewWindow = 200;
+
 function only(args: Args, allowed: string[]) {
   const extra = Object.keys(args).filter((k) => !allowed.includes(k));
   if (extra.length) throw new ToolInputError(`Parâmetros não suportados: ${extra.join(", ")}.`);
@@ -350,8 +357,8 @@ function amountCents(args: Args, required = true): number | undefined {
 function date(args: Args, key: string, today: string, required = false): string | undefined {
   const v = args[key];
   if (v === undefined) return required ? today : undefined;
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(`${v}T00:00:00Z`))) {
-    throw new ToolInputError(`${key} deve estar no formato AAAA-MM-DD.`);
+  if (!isCalendarDay(v)) {
+    throw new ToolInputError(`${key} deve ser uma data que existe, no formato AAAA-MM-DD.`);
   }
   return v;
 }
@@ -394,6 +401,12 @@ const pending = (id: string, what: string) => ({
   status: "pendente",
   message: `Pedido enviado ao Nexo (${what}). O celular ou o PC grava sozinho, mesmo com o app fechado (em segundos com o aviso do servidor, ou na checagem de 15 em 15 min); confira com get_request_status.`,
 });
+
+/// A transfer into a card changes its balance and nothing else: the invoice
+/// stays open (only pay_card_invoice records the payment of an invoice).
+export const transferToCardWarning =
+  "O destino é um cartão de crédito: a transferência muda o saldo do cartão, mas não dá baixa na fatura, que continua em aberto " +
+  "(e a projeção de caixa volta a descontá-la). Se era o pagamento da fatura, desfaça este pedido com undo_request e use pay_card_invoice.";
 
 const statusText: Record<string, string> = {
   pending: "pendente: na fila, aguardando um aparelho gravar",
@@ -500,7 +513,8 @@ export async function callAction(name: string, rawArgs: unknown, ledger: Ledger,
   const l = await withPending(ledger, args, rawDeps);
   const result = await dispatchAction(name, args, l, today, deps);
   if (name === "add_transaction") {
-    const twins = similarTransactions(l, args);
+    // Without a date the entry is today's: the check uses today too.
+    const twins = similarTransactions(l, { ...args, date: args.date ?? today });
     if (twins.length) {
       result.possible_duplicates = twins;
       result.duplicate_note = "Já existe lançamento com o mesmo valor em até 3 dias. Se for o mesmo gasto, desfaça este com undo_request ou apague o outro.";
@@ -653,7 +667,10 @@ async function dispatchAction(name: string, args: Args, l: Ledger, today: string
         }
       }
       const r = await deps.enqueue("transfer.add", body);
-      return pending(r.id, exchange ? "Câmbio" : "Transferência");
+      // The app records it as asked, but a transfer never settles an invoice.
+      return to.type === "credit"
+        ? { ...pending(r.id, "Transferência"), warning: transferToCardWarning }
+        : pending(r.id, exchange ? "Câmbio" : "Transferência");
     }
     case "update_transaction": {
       only(args, ["id", "amount", "description", "category_id", "account_id", "date", "note", "type", "subcategory",
@@ -722,8 +739,7 @@ async function dispatchAction(name: string, args: Args, l: Ledger, today: string
         const s = (await deps.suggestions(200)).find((x) => String(x.id) === id);
         if (s) {
           const kind = s.kind === "income" ? "income" : "expense";
-          const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" })
-            .format(new Date(Number(s.occurred_at)));
+          const day = movementDate(Number(s.occurred_at));
           const twins = similarTransactions(l, { type: kind, amount: Number(s.amount_cents) / 100, date: day });
           if (twins.length) {
             return {
@@ -764,23 +780,40 @@ async function dispatchAction(name: string, args: Args, l: Ledger, today: string
       }
       const before = date(args, "before", today);
       if ((!ids || ids.length === 0) && !before) throw new ToolInputError("Informe ids ou before.");
+      // The day starts in Brasília, like the dates shown for each movement.
+      const beforeMs = before ? Date.parse(`${before}T00:00:00-03:00`) : null;
       if (args.preview === true) {
-        // What would be ignored, without changing anything.
-        const beforeMs = before ? Date.parse(`${before}T00:00:00-03:00`) : null;
-        const hit = (await deps.suggestions(200)).filter((s) =>
-          ids?.length ? (ids as string[]).includes(String(s.id)) : Number(s.occurred_at) < beforeMs!);
+        // What would be ignored, without changing anything: the same union
+        // the server applies (the ids, and also everything before the day).
+        const wanted = new Set(ids?.length ? ids as string[] : []);
+        const rows = await deps.suggestions(previewWindow);
+        const hit = rows.filter((s) => wanted.has(String(s.id)) || (beforeMs !== null && Number(s.occurred_at) < beforeMs));
+        const seen = new Set(rows.map((s) => String(s.id)));
+        const unseen = [...wanted].filter((id) => !seen.has(id));
+        // Only the newest pending ones are read here; the server ignores
+        // older ones as well.
+        const partial = rows.length >= previewWindow;
         return {
           would_ignore: hit.length,
           total_value: Math.round(hit.reduce((t, s) => t + Number(s.amount_cents), 0)) / 100,
           items: hit.slice(0, 50).map((s) => ({
-            id: s.id, date: new Date(Number(s.occurred_at)).toISOString().slice(0, 10),
+            id: s.id, date: movementDate(Number(s.occurred_at)),
             amount: Number(s.amount_cents) / 100, description: s.description,
           })),
-          note: "Prévia: nada foi alterado. Chame de novo sem preview para aplicar.",
+          not_in_preview: unseen.length ? unseen : undefined,
+          incomplete: partial || undefined,
+          note: "Prévia: nada foi alterado. Chame de novo sem preview para aplicar." +
+            (partial
+              ? ` A prévia só enxerga as ${previewWindow} sugestões pendentes mais recentes: se houver mais antigas, a aplicação também ` +
+                "as ignora (as anteriores a before e os ids pedidos), e would_ignore fica menor que o total real."
+              : "") +
+            (unseen.length
+              ? " Os ids em not_in_preview não estão entre as pendentes vistas: já foram decididos, não existem" +
+                (partial ? " ou são mais antigos que as vistas." : ".")
+              : ""),
         };
       }
-      const count = await deps.ignoreSuggestions(ids?.length ? ids as string[] : null,
-        before ? Date.parse(`${before}T00:00:00-03:00`) : null);
+      const count = await deps.ignoreSuggestions(ids?.length ? ids as string[] : null, beforeMs);
       return { ignored: count, message: `${count} sugestão(ões) descartada(s). Nenhum saldo mudou.` };
     }
     case "get_daily_digest": {

@@ -4,13 +4,15 @@
 // screens. Batch changes have a dry run, and every recorded request can be
 // undone (undo_request).
 import {
-  analyze, cents, currencyOf, day, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text,
+  analyze, cents, currencyOf, day, isCalendarDay, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text,
 } from "./finance.ts";
 import { balanceCents, callTool, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { envelopeById, envelopes, spendingTypes } from "./envelopes.ts";
 import { checkSetting, settingDefs, sharedSettings } from "./settings.ts";
 import { cardInvoices, occurrences } from "./invoices.ts";
 import { FX_SCALE, lastRate, ratio } from "./portfolio.ts";
+import { toMovement } from "./inbox.ts";
+import { direction } from "./reconcile.ts";
 
 type Args = Record<string, unknown>;
 export type Enqueue = (kind: string, args: Record<string, unknown>) => Promise<{ id: string; status: string }>;
@@ -21,6 +23,8 @@ export interface ParityDeps {
   /// Open Finance accounts with official card invoices (absent: older server).
   bankAccounts?(): Promise<Record<string, unknown>[]>;
   linkBankAccount?(accountId: string, nexoAccountId: string | null): Promise<number>;
+  /// Bank movements still pending (absent: nothing is known about them here).
+  suggestions?(limit: number): Promise<Record<string, unknown>[]>;
 }
 
 /// Category icons of the app, by position (1-based), mirroring
@@ -121,7 +125,7 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
   },
   {
     name: "delete_transactions", title: "Apagar lançamentos em lote",
-    description: "Apaga vários lançamentos (saldos ajustados; transferências nas duas pontas), por ids ou por filtro. Use dry_run antes; com filtro, mande expected_count. Desfaz com undo_request.",
+    description: "Apaga vários lançamentos comuns (saldos ajustados), por ids ou por filtro. Transferências e movimentações de investimento ficam de fora: apague a transferência com delete_transaction e a operação com delete_investment_operation. Use dry_run antes; com filtro, mande expected_count. Desfaz com undo_request.",
     destructive: true,
     inputSchema: obj(filterProps),
   },
@@ -247,12 +251,12 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
   },
   {
     name: "confirm_suggestion_as_transfer", title: "Sugestão do banco como transferência",
-    description: "Registra uma sugestão do Open Finance como transferência entre duas contas suas (não é gasto nem receita).",
+    description: "Registra uma sugestão do Open Finance como transferência entre duas contas suas (não é gasto nem receita). Pagamento de fatura de cartão não é aqui: use pay_card_invoice (o app liga a sugestão ao pagamento sozinho); uma transferência para o cartão não dá baixa na fatura.",
     inputSchema: obj({ id: idField, from_account_id: idField, to_account_id: idField }, ["id", "from_account_id", "to_account_id"]),
   },
   {
     name: "link_suggestion", title: "Vincular sugestão a um lançamento",
-    description: "Liga uma sugestão do Open Finance a um lançamento que já existe (a mesma movimentação, já lançada): ela sai da fila e nada é lançado de novo. Para o IOF de uma compra internacional cobrado depois, add_amount true soma o valor ao lançamento da compra.",
+    description: "Liga uma sugestão do Open Finance a um lançamento que já existe (a mesma movimentação, já lançada): ela sai da fila e nada é lançado de novo. Saída liga a despesa e entrada a receita; uma perna de transferência só responde por uma movimentação do mesmo valor. Para o IOF de uma compra internacional cobrado depois, add_amount true soma o valor ao lançamento da compra (só despesa comum: nunca transferência, investimento, conta dividida ou ajuste).",
     inputSchema: obj({ id: idField, transaction_id: idField,
       add_amount: { type: "boolean", description: "true: soma o valor da sugestão ao lançamento (IOF da compra). Padrão: só vincula." } },
     ["id", "transaction_id"]),
@@ -313,8 +317,8 @@ function reais(v: unknown, key: string): number {
   return c;
 }
 function dateArg(v: unknown, key: string): string {
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(`${v}T00:00:00Z`))) {
-    throw new ToolInputError(`${key} deve estar no formato AAAA-MM-DD.`);
+  if (!isCalendarDay(v)) {
+    throw new ToolInputError(`${key} deve ser uma data que existe, no formato AAAA-MM-DD.`);
   }
   return v;
 }
@@ -360,6 +364,36 @@ const isPlain = (l: Ledger, t: Row) => {
   return !id.startsWith("investment:") && !source.startsWith("transfer:") && !source.startsWith("investment:");
 };
 
+/// A filter of the wrong type is refused, never dropped: without it the
+/// batch would take more entries than the person asked for.
+function checkFilter(args: Args) {
+  for (const k of ["account_id", "category_id", "subcategory"]) {
+    if (args[k] !== undefined && typeof args[k] !== "string") throw new ToolInputError(`${k} deve ser um texto.`);
+  }
+  if (args.search !== undefined && (typeof args.search !== "string" || !args.search.trim() || args.search.length > 80)) {
+    throw new ToolInputError("search deve ser um texto de 1 a 80 letras.");
+  }
+  if (args.type !== undefined && args.type !== "expense" && args.type !== "income") {
+    throw new ToolInputError("type deve ser expense ou income.");
+  }
+  if (args.status !== undefined && args.status !== "paid" && args.status !== "pending") {
+    throw new ToolInputError("status deve ser paid ou pending.");
+  }
+  for (const k of ["min_amount", "max_amount"]) {
+    const v = args[k];
+    if (v !== undefined && (typeof v !== "number" || !isFinite(v) || v < 0)) {
+      throw new ToolInputError(`${k} deve ser um valor em reais, zero ou mais.`);
+    }
+  }
+  if (typeof args.min_amount === "number" && typeof args.max_amount === "number" && args.min_amount > args.max_amount) {
+    throw new ToolInputError("min_amount não pode ser maior que max_amount.");
+  }
+  const n = args.expected_count;
+  if (n !== undefined && (typeof n !== "number" || !Number.isInteger(n) || n < 0)) {
+    throw new ToolInputError("expected_count deve ser um inteiro, zero ou mais.");
+  }
+}
+
 /// Entries chosen by ids or by a filter, for batch tools.
 function select(l: Ledger, args: Args, opts: { allowAdjustments?: boolean; allowInvestments?: boolean } = {}) {
   const metas = metadataIndex(l);
@@ -379,6 +413,7 @@ function select(l: Ledger, args: Args, opts: { allowAdjustments?: boolean; allow
     });
   } else {
     byFilter = true;
+    checkFilter(args);
     const from = args.from === undefined ? undefined : dateArg(args.from, "from");
     const to = args.to === undefined ? undefined : dateArg(args.to, "to");
     if (!from && !to && args.category_id === undefined && args.account_id === undefined && args.search === undefined &&
@@ -754,7 +789,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       only(args, ["id", "amount", "period", "full_period"]);
       const b = find(l.budgets, args.id);
       if (!b) throw new ToolInputError("Orçamento não encontrado. Use get_budgets.");
-      const body: Args = { id: text(b.id), category_id: text(b.category_id), period: args.period ?? text(b.period) ?? "monthly" };
+      const body: Args = { id: text(b.id), category_id: text(b.category_id), period: args.period ?? (text(b.period) || "monthly") };
       if (body.period !== "monthly" && body.period !== "weekly") throw new ToolInputError("period deve ser monthly ou weekly.");
       body.amount_cents = args.amount === undefined ? cents(num(b.amount)) : reais(args.amount, "amount");
       const full = bool(args.full_period, "full_period");
@@ -904,8 +939,15 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       if (!/^pluggy:[0-9A-Za-z-]{1,64}$/.test(id)) throw new ToolInputError("id de sugestão inválido.");
       const from = account(l, args.from_account_id), to = account(l, args.to_account_id);
       if (from.id === to.id) throw new ToolInputError("Escolha contas diferentes.");
-      return pending((await enqueue("suggestion.transfer", { id, from_account_id: text(from.id), to_account_id: text(to.id) })).id,
-        "Sugestão como transferência");
+      const q = await enqueue("suggestion.transfer", { id, from_account_id: text(from.id), to_account_id: text(to.id) });
+      // The app records it as asked, but a transfer never settles an invoice.
+      return to.type === "credit"
+        ? {
+          ...pending(q.id, "Sugestão como transferência"),
+          warning: "O destino é um cartão de crédito: a transferência muda o saldo do cartão, mas não dá baixa na fatura, que continua em aberto. " +
+            "Se a sugestão é o pagamento da fatura, desfaça este pedido com undo_request e use pay_card_invoice; o app liga a sugestão ao pagamento sozinho.",
+        }
+        : pending(q.id, "Sugestão como transferência");
     }
     case "link_suggestion": {
       only(args, ["id", "transaction_id", "add_amount"]);
@@ -916,8 +958,39 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       }
       const t = find(l.transactions, args.transaction_id);
       if (!t) throw new ToolInputError("Lançamento não encontrado. Use list_transactions.");
-      if (args.add_amount === true && t.type !== "expense") {
-        throw new ToolInputError("O IOF só se soma a uma compra (despesa).");
+      const source = meta(metadataIndex(l).get(text(t.id))).source;
+      const transferLeg = source.startsWith("transfer:");
+      if (args.add_amount === true) {
+        if (t.type !== "expense") throw new ToolInputError("O IOF só se soma a uma compra (despesa).");
+        // The app refuses these as well (addIofToTransaction): said here,
+        // before the request waits in the queue to be refused.
+        if (transferLeg || text(t.id).startsWith("investment:") || source.startsWith("investment:") ||
+          source.startsWith("shared_bill:") || source === "opening_balance") {
+          throw new ToolInputError("add_amount só soma o IOF a uma compra comum: transferência, investimento, conta dividida e ajuste de saldo não recebem IOF.");
+        }
+      }
+      // The movement itself, while the server still lists it. An entry of
+      // the other direction is not the same movement, and the leg of a
+      // transfer only answers for the same amount (the rule of the app links
+      // legs to exact amounts only). Linking a purchase to one would make
+      // the purchase vanish from the queue without ever being spending.
+      let listed: Record<string, unknown>[] = [];
+      try {
+        listed = deps.suggestions ? await deps.suggestions(200) : [];
+      } catch {
+        // Not known here: the app checks the suggestion when it applies.
+      }
+      const s = listed.find((x) => String(x.id) === id);
+      if (s) {
+        const m = toMovement(s);
+        const out = direction(m) === "out";
+        if (t.type && t.type !== (out ? "expense" : "income")) {
+          throw new ToolInputError(`A sugestão é uma ${out ? "saída" : "entrada"} e o lançamento é uma ${t.type === "income" ? "receita" : "despesa"}: não são a mesma movimentação.`);
+        }
+        if (transferLeg && args.add_amount !== true && cents(num(t.amount)) !== m.amountCents) {
+          throw new ToolInputError("Este lançamento é uma perna de transferência de outro valor: não é a mesma movimentação. " +
+            "Se a sugestão é um gasto ou uma receita, use confirm_suggestion; se é dinheiro entre contas suas, confirm_suggestion_as_transfer.");
+        }
       }
       return pending((await enqueue("suggestion.link", {
         id, transaction_id: text(t.id), add_amount: args.add_amount === true,
@@ -1054,7 +1127,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         net_worth: money(total),
         not_converted: Object.keys(others).length ? Object.fromEntries(Object.entries(others).map(([c, v]) => [c, money(v)])) : undefined,
         rates_used: Object.keys(rates).length ? Object.fromEntries(Object.entries(rates).map(([c, r]) => [c, r / FX_SCALE])) : undefined,
-        note: "Empréstimos pelo valor principal menos o que já foi pago (sem juros futuros). Investimentos pela última cotação. Bens que repetem uma conta ou investimento contam duas vezes: confira.",
+        note: "Empréstimos pelo valor principal menos o que já foi pago (sem juros futuros). Investimentos pela última cotação. Contas marcadas como fora do saldo total entram no patrimônio, como na tela Patrimônio do app. Bens que repetem uma conta ou investimento contam duas vezes: confira.",
       };
     }
     case "get_cash_projection": {
