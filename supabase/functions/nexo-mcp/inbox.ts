@@ -3,7 +3,9 @@
 // still pending and the synced ledger. Read-only: what the app settles by
 // itself is only described here, the app does it.
 import { cents, day, type Ledger, meta, metadataIndex, money, num, type Row, text } from "./finance.ts";
-import { type Entry, type Match, type Movement, paymentLegs, reconcile, resolutionLabel, type Rule } from "./reconcile.ts";
+import {
+  direction, type Entry, type Match, type Movement, paymentLegs, reconcile, resolutionLabel, type Rule,
+} from "./reconcile.ts";
 import { sharedSettings } from "./settings.ts";
 
 type Raw = Record<string, unknown>;
@@ -175,5 +177,95 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
     settled_by_app: auto.length
       ? { count: auto.length, by_reason: reasons, items: auto.slice(0, Math.min(limit, 20)).map(row) }
       : undefined,
+  };
+}
+
+/// One Nexo account against what its banks sent in a period: what the bank
+/// has and the Nexo does not, what the Nexo has and the bank does not, and
+/// how much of the difference between the two balances that explains.
+/// [movements]: every bank movement of the period, pending or decided.
+export function reconcileAccount(l: Ledger, movements: Raw[], accountId: string, from: string, to: string,
+  bankBalanceCents: number | null, nexoBalanceCents: number, now: number,
+  inPeriod: (s: Raw) => boolean = () => true) {
+  const pending = movements.filter((s) => s.review === "pending");
+  const decided = movements.filter((s) => s.review !== "pending");
+  // Pairs cross accounts: everything pending is classified, then this
+  // account's side is read.
+  const matches = new Map(classify(l, pending, decided, now).map((m) => [m.id, m]));
+  const mine = (s: Raw) => str(s.nexo_account_id) === accountId && inPeriod(s);
+  const signed = (s: Raw) => (direction(toMovement(s)) === "in" ? 1 : -1) * Number(s.amount_cents);
+  const metas = metadataIndex(l);
+  const names = new Map(l.accounts.map((a) => [text(a.id), text(a.name)]));
+
+  // Entries a bank movement already answers for.
+  const answered = new Set<string>();
+  for (const d of decided) if (typeof d.transaction_id === "string" && d.transaction_id) answered.add(d.transaction_id);
+  for (const m of matches.values()) if (m.resolution === "linked" && m.transactionId) answered.add(m.transactionId);
+
+  // Not money that is missing: it cancels out, or it is not this account's.
+  const neutral = new Set(["linked", "internal", "reversal", "reserve"]);
+  const missing: Record<string, unknown>[] = [], maybe: Record<string, unknown>[] = [];
+  let missingCents = 0, ignoredCents = 0, ignoredCount = 0;
+  for (const s of pending.filter(mine)) {
+    const m = matches.get(String(s.id))!;
+    if (neutral.has(m.resolution)) continue;
+    const item = {
+      id: s.id, date: movementDate(Number(s.occurred_at)), amount: money(signed(s)), description: s.description,
+      bank: s.bank, status: resolutionLabel[m.resolution], what_to_do: advice(m, true),
+    };
+    if (m.resolution === "maybe") {
+      const t = l.transactions.find((x) => text(x.id) === m.transactionId);
+      maybe.push({ ...item, entry: t ? { id: text(t.id), description: text(t.description), date: day(text(t.date)) } : undefined });
+    } else {
+      missing.push(item);
+      missingCents += signed(s);
+    }
+  }
+  // Ignored by the person: the bank moved the money and the Nexo did not.
+  for (const s of decided.filter(mine)) {
+    if (s.review !== "ignored") continue;
+    ignoredCents += signed(s);
+    ignoredCount++;
+  }
+
+  const only: Record<string, unknown>[] = [];
+  let onlyCents = 0;
+  for (const t of l.transactions) {
+    const d = day(text(t.date));
+    if (text(t.account_id) !== accountId || d < from || d > to || answered.has(text(t.id))) continue;
+    const m = meta(metas.get(text(t.id)));
+    // Has not left the account yet, or never moves its balance.
+    if (m.status === "pending" || metas.get(text(t.id))?.affects_balance === 0) continue;
+    const value = (t.type === "income" ? 1 : -1) * cents(num(t.amount));
+    only.push({
+      id: text(t.id), date: d, amount: money(value), description: text(t.description),
+      kind: m.source === "opening_balance" ? "ajuste de saldo" : m.source.startsWith("transfer:") ? "transferência"
+        : m.source.startsWith("investment") ? "investimento" : t.type === "income" ? "receita" : "despesa",
+    });
+    onlyCents += value;
+  }
+  only.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  const difference = bankBalanceCents == null ? null : bankBalanceCents - nexoBalanceCents;
+  // The bank moved what was ignored too; the Nexo did not.
+  const explained = missingCents + ignoredCents - onlyCents;
+  return {
+    account_id: accountId, account: names.get(accountId), from, to,
+    bank_balance: bankBalanceCents == null ? null : money(bankBalanceCents), nexo_balance: money(nexoBalanceCents),
+    difference: difference == null ? null : money(difference),
+    in_bank_not_in_nexo: { count: missing.length, total: money(missingCents), items: missing.slice(0, 60) },
+    in_nexo_not_in_bank: { count: only.length, total: money(onlyCents), items: only.slice(0, 60) },
+    maybe_recorded: maybe.length ? maybe.slice(0, 30) : undefined,
+    ignored_bank_movements: ignoredCount ? { count: ignoredCount, total: money(ignoredCents) } : undefined,
+    explained_by_period: money(explained),
+    unexplained: difference == null ? null : money(difference - explained),
+    reading: difference == null
+      ? "Sem saldo do banco para esta conta (nenhuma conta do Open Finance vinculada): só a comparação de movimentos."
+      : difference === 0
+      ? "O saldo do Nexo é igual ao do banco."
+      : difference === explained
+      ? "A diferença é exatamente o que está listado: lance o que falta (ou ligue ao que já existe) e confira o que só o Nexo tem."
+      : "A diferença não fecha só com este período: pode haver movimento anterior, lançamento em outra conta do Nexo, movimento ignorado ou dado do banco atrasado. Amplie o período antes de ajustar o saldo.",
+    note: "Sinal: positivo entra na conta, negativo sai. in_bank_not_in_nexo são movimentos do banco ainda sem lançamento; in_nexo_not_in_bank são lançamentos pagos do período que nenhum movimento do banco confirma (dinheiro vivo, lançado à mão em duplicidade, ou dia ainda não enviado pelo banco). ignored_bank_movements são movimentos que a pessoa descartou: o banco mexeu no dinheiro e o Nexo não, e entram na conta da diferença. Só use adjust_account_balance depois de entender a diferença.",
   };
 }

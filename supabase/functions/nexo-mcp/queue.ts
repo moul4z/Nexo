@@ -5,8 +5,16 @@
 /// apply the request as if it were in reais, so it must not take it.
 export const DOLLAR_BUILD = 58;
 
+/// First build with the shared reconciliation (1.18.0+60): rules that
+/// register by themselves, transfer and internal rules. An older app would
+/// save them as a plain category rule.
+export const RECONCILE_BUILD = 60;
+
 /// The minimum app build a request needs, or null when any version can.
 export function minBuildFor(kind: string, args: Record<string, unknown>): number | null {
+  if (kind === "rule.save" && (args.auto === true || args.type === "transfer" || args.type === "internal")) {
+    return RECONCILE_BUILD;
+  }
   const currency = typeof args.currency === "string" ? args.currency : undefined;
   const foreign = (currency !== undefined && currency !== "BRL") ||
     args.brl_cents != null || args.fx_micros != null || args.received_cents != null ||

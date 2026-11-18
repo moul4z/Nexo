@@ -59,7 +59,9 @@ export const instructions =
   "pedido anterior ainda pendente. Antes de lançar, confira se já não existe o mesmo lançamento; reenviar o mesmo pedido não " +
   "duplica (idempotency_key). Todo pedido gravado pode ser desfeito com undo_request; list_requests mostra o que foi feito. " +
   "Em mudanças em lote (update_transactions, delete_transactions, convert_to_balance_adjustment, merge_categories) rode antes " +
-  "com dry_run e mostre o resultado. Para acertar um saldo com o extrato use adjust_account_balance, nunca uma despesa ou " +
+  "com dry_run e mostre o resultado. Quando o saldo não bate com o banco, rode antes reconcile_account: ele mostra o que está " +
+  "no banco e não no Nexo, o que só o Nexo tem e quanto da diferença isso explica; lance ou ligue o que falta antes de ajustar. " +
+  "Para acertar um saldo com o extrato use adjust_account_balance, nunca uma despesa ou " +
   "receita de ajuste; acertos antigos lançados como receita viram ajuste neutro com convert_to_balance_adjustment. " +
   "Retirar de um objetivo devolve dinheiro à conta; se a reserva era só contábil, use move_goal com move_money false. " +
   "Orçamento por tipo de gasto: get_spending_types, set_category_type e set_spending_targets. Orçamento criado no meio do mês " +

@@ -10,6 +10,7 @@ import { balanceCents, callTool, ToolInputError, type ToolDefinition } from "./t
 import { envelopeById, envelopes, spendingTypes } from "./envelopes.ts";
 import { checkSetting, settingDefs, sharedSettings } from "./settings.ts";
 import { cardInvoices, occurrences } from "./invoices.ts";
+import { reconcileAccount } from "./inbox.ts";
 import { FX_SCALE, lastRate, ratio } from "./portfolio.ts";
 import { toMovement } from "./inbox.ts";
 import { direction } from "./reconcile.ts";
@@ -25,6 +26,10 @@ export interface ParityDeps {
   linkBankAccount?(accountId: string, nexoAccountId: string | null): Promise<number>;
   /// Bank movements still pending (absent: nothing is known about them here).
   suggestions?(limit: number): Promise<Record<string, unknown>[]>;
+  /// Bank movements of a period, pending or decided (newer servers only).
+  bankMovements?(fromMs: number, toMs: number): Promise<Record<string, unknown>[]>;
+  /// The clock, for tests.
+  now?(): number;
 }
 
 /// Category icons of the app, by position (1-based), mirroring
@@ -58,7 +63,7 @@ const filterProps = {
 
 export const readOnlyParity = new Set(["describe_app_capabilities", "get_spending_types", "get_settings",
   "list_requests", "get_import_rules", "get_monthly_trend", "get_net_worth", "get_cash_projection",
-  "get_spending_breakdown", "get_bank_accounts"]);
+  "get_spending_breakdown", "get_bank_accounts", "reconcile_account"]);
 
 export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
   {
@@ -239,10 +244,14 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
     inputSchema: obj({}),
   },
   {
-    name: "save_import_rule", title: "Criar ou alterar regra de categoria",
-    description: "Ex.: sempre que vier IFOOD, sugerir Alimentação. Não altera lançamentos antigos nem saldos. Com id altera a regra.",
+    name: "save_import_rule", title: "Criar ou alterar regra do banco",
+    description: "Regra para movimentos do banco cujo texto contém pattern. kind expense ou income (padrão: o tipo da categoria): sugere a categoria. kind transfer: é dinheiro entre contas suas, com target_account_id como destino (ex.: depósito numa casa de apostas ou corretora cadastrada como conta). kind internal: movimento que não é lançamento (sai da fila). auto true: o app registra sozinho, sem perguntar, e mostra em Resolvidas automaticamente (pode ser desfeito); use só quando a pessoa pedir e com pattern específico. Não altera lançamentos antigos nem saldos. Com id altera a regra.",
     inputSchema: obj({ id: idField, pattern: { type: "string", minLength: 2, maxLength: 60 }, category_id: idField,
-      subcategory: { type: "string", maxLength: 60 } }, ["pattern", "category_id"]),
+      subcategory: { type: "string", maxLength: 60 },
+      kind: { type: "string", enum: ["expense", "income", "transfer", "internal"] },
+      auto: { type: "boolean", description: "true: lançar sozinho (pattern com 3 letras ou mais)" },
+      target_account_id: { ...idField, description: "Só para kind transfer: a conta de destino (não pode ser cartão)" },
+    }, ["pattern"]),
   },
   {
     name: "delete_import_rule", title: "Excluir regra de categoria", destructive: true,
@@ -265,6 +274,15 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
     name: "get_bank_accounts", title: "Saldo do banco × Nexo",
     description: "Contas do Open Finance: saldo informado pelo banco, limite e faturas oficiais dos cartões, a conta do Nexo vinculada e a diferença para o saldo do Nexo (soma de várias contas do banco quando vinculadas à mesma). Para acertar, use adjust_account_balance.",
     inputSchema: obj({}),
+  },
+  {
+    name: "reconcile_account", title: "Conferir conta com o banco",
+    description: "Compara uma conta ou cartão do Nexo com o que os bancos vinculados enviaram num período: o que está no banco e não no Nexo, o que está no Nexo e nenhum movimento do banco confirma, e quanto da diferença entre os dois saldos isso explica. Use antes de qualquer adjust_account_balance. Só leitura.",
+    inputSchema: obj({
+      account_id: { ...idField, description: "Conta ou cartão do Nexo (get_accounts)" },
+      from: { type: "string", description: "AAAA-MM-DD. Padrão: 30 dias antes de to" },
+      to: { type: "string", description: "AAAA-MM-DD. Padrão: hoje" },
+    }, ["account_id"]),
   },
   {
     name: "link_bank_account", title: "Vincular conta do banco",
@@ -541,7 +559,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           empréstimos: { read: ["get_loans"], write: ["add_loan", "update_loan", "delete_loan", "pay_loan_installment", "skip_loan_installment", "delete_loan_payment"] },
           emprestado_e_devido: { read: ["get_lended"], write: ["add_lended", "update_lended", "settle_lended", "delete_lended", "update_person", "delete_person"] },
           bens_e_desejos: { read: ["get_assets", "get_wishlist"], write: ["add_asset", "update_asset", "delete_asset", "add_wishlist_item", "update_wishlist_item", "delete_wishlist_item"] },
-          open_finance: { read: ["list_suggestions", "get_bank_sync_status", "get_import_rules", "get_bank_accounts"], write: ["confirm_suggestion", "confirm_suggestion_as_transfer", "link_suggestion", "ignore_suggestions", "save_import_rule", "delete_import_rule", "refresh_bank_data", "link_bank_account"] },
+          open_finance: { read: ["list_suggestions", "get_bank_sync_status", "get_import_rules", "get_bank_accounts", "reconcile_account"], write: ["confirm_suggestion", "confirm_suggestion_as_transfer", "link_suggestion", "ignore_suggestions", "save_import_rule", "delete_import_rule", "refresh_bank_data", "link_bank_account"] },
           configurações: { read: ["get_settings"], write: ["set_setting", "set_spending_targets"] },
           análises: { read: ["get_financial_summary", "get_spending_by_category", "get_spending_breakdown", "get_monthly_trend", "get_net_worth", "get_cash_projection"] },
           pedidos: { read: ["get_request_status", "list_requests", "describe_app_capabilities"], write: ["undo_request"] },
@@ -910,22 +928,59 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       only(args, []);
       return {
         rules: (l.importRules ?? []).map((r) => ({
-          id: text(r.id), pattern: text(r.pattern), type: text(r.type), category_id: text(r.category_id),
-          category: text(find(l.categories, r.category_id)?.name) || "Categoria removida", subcategory: text(r.subcategory) || undefined,
+          id: text(r.id), pattern: text(r.pattern), type: text(r.type),
+          category_id: text(r.category_id) || undefined,
+          category: text(r.category_id) ? text(find(l.categories, r.category_id)?.name) || "Categoria removida" : undefined,
+          subcategory: text(r.subcategory) || undefined,
+          auto: r.auto === 1 || r.auto === true || undefined,
+          target_account_id: text(r.target_account_id) || undefined,
+          target_account: text(r.target_account_id) ? text(find(l.accounts, r.target_account_id)?.name) || "conta removida" : undefined,
         })),
-        note: "O texto mais longo vence quando duas regras servem. Regras sugerem categoria; não mudam lançamentos antigos.",
+        note: "O texto mais longo vence quando duas regras servem. type transfer: dinheiro entre contas suas; internal: sai da fila sem lançar; auto: o app registra sozinho. Regras não mudam lançamentos antigos.",
       };
     }
     case "save_import_rule": {
-      only(args, ["id", "pattern", "category_id", "subcategory"]);
+      only(args, ["id", "pattern", "category_id", "subcategory", "kind", "auto", "target_account_id"]);
       if (args.id !== undefined && !find(l.importRules, args.id)) throw new ToolInputError("Regra não encontrada. Use get_import_rules.");
-      const c = category(l, args.category_id);
-      const body: Args = {
-        pattern: str(args, "pattern", 60), type: text(c.type) || "expense", category_id: text(c.id),
-        subcategory: str(args, "subcategory", 60, false) ?? "",
-      };
+      const kind = args.kind;
+      if (kind !== undefined && !["expense", "income", "transfer", "internal"].includes(kind as string)) {
+        throw new ToolInputError("kind deve ser expense, income, transfer ou internal.");
+      }
+      const auto = bool(args.auto, "auto") === true;
+      const pattern = str(args, "pattern", 60)!;
+      if (auto && pattern.trim().length < 3) {
+        throw new ToolInputError("Para lançar sozinho, use pelo menos 3 letras do texto do banco.");
+      }
+      const body: Args = { pattern, subcategory: "" };
+      if (kind === "transfer" || kind === "internal") {
+        if (args.category_id !== undefined || args.subcategory !== undefined) {
+          throw new ToolInputError("Regra de transferência ou de movimento interno não tem categoria.");
+        }
+        body.type = kind;
+        body.category_id = "";
+        if (kind === "transfer") {
+          // Never a card: paying an invoice is pay_card_invoice.
+          body.target_account_id = text(account(l, args.target_account_id, true).id);
+        } else if (args.target_account_id !== undefined) {
+          throw new ToolInputError("target_account_id só vale para kind transfer.");
+        }
+      } else {
+        if (args.target_account_id !== undefined) throw new ToolInputError("target_account_id só vale para kind transfer.");
+        const c = category(l, args.category_id);
+        if (kind !== undefined && text(c.type) !== kind) {
+          throw new ToolInputError("A categoria é de outro tipo (receita ou despesa).");
+        }
+        body.type = text(c.type) || "expense";
+        body.category_id = text(c.id);
+        body.subcategory = str(args, "subcategory", 60, false) ?? "";
+      }
+      // Sent only when asked: an older app keeps saving plain rules.
+      if (auto) body.auto = true;
       if (args.id !== undefined) body.id = args.id;
-      return pending((await enqueue("rule.save", body)).id, "Regra de categoria");
+      const sent = pending((await enqueue("rule.save", body)).id, auto ? "Regra que lança sozinha" : "Regra do banco");
+      return auto
+        ? { ...sent, warning: "Esta regra registra sozinha o que casar com o texto, sem perguntar. Cada registro aparece em Para revisar › Resolvidas automaticamente e pode ser desfeito." }
+        : sent;
     }
     case "delete_import_rule": {
       only(args, ["id"]);
@@ -995,6 +1050,35 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       return pending((await enqueue("suggestion.link", {
         id, transaction_id: text(t.id), add_amount: args.add_amount === true,
       })).id, args.add_amount === true ? "IOF somado à compra" : "Vínculo da sugestão");
+    }
+    case "reconcile_account": {
+      only(args, ["account_id", "from", "to"]);
+      const acc = account(l, args.account_id);
+      const to = args.to === undefined ? today : dateArg(args.to, "to");
+      const from = args.from === undefined ? addDays(to, -30) : dateArg(args.from, "from");
+      if (from > to) throw new ToolInputError("from deve ser antes de to.");
+      if (to > today) throw new ToolInputError("to não pode ser no futuro.");
+      if (addDays(from, 92) < to) throw new ToolInputError("Confira no máximo 92 dias por vez.");
+      if (!deps.bankMovements) {
+        return { note: "O servidor ainda não informa os movimentos do banco por período. Atualize o servidor do Nexo." };
+      }
+      // Brasília days; a few days around, so pairs and an IOF find their other side.
+      const movements = await deps.bankMovements(
+        Date.parse(`${addDays(from, -5)}T00:00:00-03:00`), Date.parse(`${addDays(to, 6)}T00:00:00-03:00`));
+      const fromMs = Date.parse(`${from}T00:00:00-03:00`), toMs = Date.parse(`${addDays(to, 1)}T00:00:00-03:00`);
+      // The neighbours help the matching; only the period is reported.
+      const inPeriod = (s: Record<string, unknown>) => Number(s.occurred_at) >= fromMs && Number(s.occurred_at) < toMs;
+      const linked = deps.bankAccounts
+        ? (await deps.bankAccounts()).filter((r) => r.nexo_account_id === acc.id && typeof r.balance_cents === "number")
+        : [];
+      const bank = linked.length
+        ? linked.reduce((sum, r) => sum + (r.type === "CREDIT" ? -1 : 1) * (r.balance_cents as number), 0)
+        : null;
+      return {
+        ...reconcileAccount(l, movements, text(acc.id), from, to, bank, balanceCents(l, text(acc.id)),
+          deps.now?.() ?? Date.now(), inPeriod),
+        banks: linked.map((r) => ({ bank: r.bank, name: r.name, data_until: r.bank_updated_at ?? undefined })),
+      };
     }
     case "get_bank_accounts": {
       only(args, []);

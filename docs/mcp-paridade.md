@@ -58,6 +58,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Contas: ver | get_accounts | ok | |
 | Contas: criar, alterar, excluir | add_account, update_account, delete_account | ok | conta de pagamento, mínimo, lembrete, total dos bancos, cor |
 | Conferir saldo com o banco | get_bank_accounts, adjust_account_balance | ok | soma várias contas do banco vinculadas à mesma do Nexo |
+| Conferir com o banco, item a item | reconcile_account | ok | o que está no banco e não no Nexo, e o contrário; quanto da diferença isso explica |
 | Vincular conta do banco | link_bank_account | ok | não mexe em saldo |
 | Fatura do cartão com extrato | get_card_invoices (`include_transactions`) | ok | compra no dia do fechamento vai para a seguinte |
 | Fatura oficial do banco ao lado | get_bank_accounts | ok | |

@@ -623,6 +623,11 @@ await test('queue rules: dollar requests need the dollar build, others any versi
   assert.equal(minBuildFor('investment.add', { currency: 'BRL', ticker: 'BBAS3' }), null);
   assert.equal(minBuildFor('transaction.add', { amount_cents: 3700 }), null);
   assert.equal(minBuildFor('transfer.add', { amount_cents: 100 }), null);
+  // A rule that registers by itself needs the app that knows what it is.
+  assert.equal(minBuildFor('rule.save', { pattern: 'ifood', type: 'expense' }), null);
+  assert.equal(minBuildFor('rule.save', { pattern: 'ifood', type: 'expense', auto: true }), 60);
+  assert.equal(minBuildFor('rule.save', { pattern: 'casa de apostas', type: 'transfer' }), 60);
+  assert.equal(minBuildFor('rule.save', { pattern: 'aplicacao rdb', type: 'internal' }), 60);
 });
 await test('connection: a revoked or broken address says what to do; a new one works', async () => {
   const { unauthorizedMessage } = await import('../supabase/functions/nexo-mcp/queue.ts');
@@ -834,6 +839,36 @@ const scenario = {
   devices: [{ app_version: '1.13.0+52', kinds: ['category.envelope'], settings: { themeMode: 'dark' }, seen_at: '2026-10-29T10:00:00Z' }],
 };
 const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.deps);
+
+await test('rules: transfer, internal and "register by itself", asked through the connector', async () => {
+  const q = smartQueue();
+  await pact(q, 'save_import_rule', { pattern: 'IFOOD', category_id: 'delivery' });
+  assert.deepEqual(q.items.at(-1).args, { pattern: 'IFOOD', subcategory: '', type: 'expense', category_id: 'delivery' },
+    'a plain rule is sent as before');
+  const auto = await pact(q, 'save_import_rule', { pattern: 'Mercado Exemplo', category_id: 'mercado', auto: true });
+  assert.equal(q.items.at(-1).args.auto, true);
+  assert.match(auto.warning, /sem perguntar/);
+  await pact(q, 'save_import_rule', { pattern: 'Casa de Apostas Exemplo', kind: 'transfer', target_account_id: 'main', auto: true });
+  assert.deepEqual(q.items.at(-1).args, { pattern: 'Casa de Apostas Exemplo', subcategory: '', type: 'transfer', category_id: '',
+    target_account_id: 'main', auto: true });
+  await pact(q, 'save_import_rule', { pattern: 'Aplicação RDB', kind: 'internal' });
+  assert.deepEqual(q.items.at(-1).args, { pattern: 'Aplicação RDB', subcategory: '', type: 'internal', category_id: '' });
+  const sent = q.items.length;
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'x', kind: 'transfer', target_account_id: 'nu' }), /cartão/);
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'xyz', kind: 'transfer' }), ToolInputError);
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'ab', category_id: 'mercado', auto: true }), /3 letras/);
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'xyz', kind: 'internal', category_id: 'mercado' }), /não tem categoria/);
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'xyz', kind: 'income', category_id: 'mercado' }), /outro tipo/);
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'xyz', category_id: 'mercado', target_account_id: 'main' }), /só vale/);
+  await assert.rejects(pact(q, 'save_import_rule', { pattern: 'xyz' }), ToolInputError);
+  assert.equal(q.items.length, sent, 'nothing refused was queued');
+  const rules = (await pact(q, 'get_import_rules', {}, { ...scenario, importRules: [
+    { id: 'r1', pattern: 'ifood', type: 'expense', category_id: 'delivery', subcategory: '', auto: 0 },
+    { id: 'r2', pattern: 'casa de apostas exemplo', type: 'transfer', category_id: '', subcategory: '', auto: 1, target_account_id: 'main' },
+  ] })).rules;
+  assert.deepEqual([rules[0].auto, rules[0].category], [undefined, 'Delivery']);
+  assert.deepEqual([rules[1].type, rules[1].auto, rules[1].target_account, rules[1].category], ['transfer', true, 'Conta principal', undefined]);
+});
 const cents2 = (v) => Math.round(v * 100) / 100;
 
 await test('parity: spending types read like the Orçamento screen', async () => {
@@ -1297,6 +1332,66 @@ await test('cash projection: the card subscription enters the invoice of its cyc
   assert.deepEqual(invoices.filter((t) => t.date > '2026-11-26').map((t) => [t.date, t.amount]),
     [['2026-12-26', -21.9], ['2027-01-26', -21.9]], 'the invoices after the open one');
   assert(!cash.timeline.some((t) => t.what.startsWith('Spotify')), 'never twice: only through the invoice');
+});
+
+await test('reconcile_account: what only the bank has, what only the Nexo has, and how much that explains', async () => {
+  const q = smartQueue();
+  const at = (d) => Date.parse(`${d}T15:00:00Z`);
+  q.deps.now = () => at('2026-10-29');
+  const l = { ...scenario,
+    accounts: [scenario.accounts[0]], balances: { main: 1000_000000 }, recurring: [],
+    transactions: [
+      tx('e1', 50, '2026-10-21', 'main', 'mercado', { description: 'Mercado Bom' }),
+      tx('e2', 30, '2026-10-22', 'main', 'mercado', { description: 'Padaria Exemplo' }),
+      tx('e3', 20, '2026-10-23', 'main', 'mercado', { description: 'Feira em dinheiro' }),
+      tx('e4', 99, '2026-10-24', 'main', 'moradia', { description: 'Conta que vence depois' }),
+      tx('old', 10, '2026-10-01', 'main', 'mercado'),
+    ],
+    metadata: [{ transaction_id: 'e4', status: 'pending', due_date: '2026-11-05T00:00:00.000' }],
+  };
+  const row = (id, date, cents, description, extra = {}) => ({ id: `pluggy:${id}`, bank: 'Banco A', occurred_at: at(date), amount_cents: cents,
+    kind: 'expense', medium: 'bank', description, direction: 'out', account_id: 'acc-1', nexo_account_id: 'main', settled: true, review: 'pending', ...extra });
+  const movements = [
+    row('m1', '2026-10-21', 5000, 'MERCADO BOM', { review: 'confirmed', transaction_id: 'e1' }),
+    row('m2', '2026-10-22', 3000, 'Padaria Exemplo'),
+    row('m3', '2026-10-24', 1500, 'Farmácia Exemplo'),
+    row('m4', '2026-10-25', 12, 'Rendimentos', { kind: 'income', direction: 'in' }),
+    row('m5', '2026-10-26', 700, 'Tarifa', { review: 'ignored' }),
+    row('m6', '2026-10-10', 99900, 'Fora do período'),
+    row('m7', '2026-10-24', 800, 'De outra conta', { nexo_account_id: 'nu' }),
+  ];
+  let asked;
+  q.deps.bankMovements = async (from, to) => { asked = [from, to]; return movements; };
+  // Bank = Nexo + what only the bank has (−15,00 + 0,12 − 7,00) − what only the Nexo has (−20,00).
+  q.deps.bankAccounts = async () => [{ account_id: 'acc-1', bank: 'Banco A', type: 'BANK', name: 'Corrente',
+    balance_cents: 100000 - 1500 + 12 - 700 + 2000, nexo_account_id: 'main', bills: [] }];
+  const r = await pact(q, 'reconcile_account', { account_id: 'main', from: '2026-10-20', to: '2026-10-29' }, l);
+  assert.deepEqual(asked, [Date.parse('2026-10-15T00:00:00-03:00'), Date.parse('2026-11-04T00:00:00-03:00')], 'a few days around');
+  assert.deepEqual(r.in_bank_not_in_nexo.items.map((i) => [i.id, i.amount]), [['pluggy:m3', -15], ['pluggy:m4', 0.12]]);
+  assert.equal(r.in_bank_not_in_nexo.total, -14.88);
+  assert.deepEqual(r.in_nexo_not_in_bank.items.map((i) => [i.id, i.amount]), [['e3', -20]],
+    'e1 was confirmed, e2 is the same as a pending movement, e4 has not left the account, old is before the period');
+  assert.deepEqual(r.ignored_bank_movements, { count: 1, total: -7 });
+  assert.deepEqual([r.bank_balance, r.nexo_balance, r.difference, r.explained_by_period, r.unexplained], [998.12, 1000, -1.88, -1.88, 0]);
+  assert.match(r.reading, /exatamente/);
+  assert.match(r.in_bank_not_in_nexo.items[0].what_to_do, /confirm_suggestion/);
+
+  // A difference the period does not explain is said, not adjusted away.
+  q.deps.bankAccounts = async () => [{ account_id: 'acc-1', bank: 'Banco A', type: 'BANK', name: 'Corrente', balance_cents: 90000, nexo_account_id: 'main', bills: [] }];
+  const off = await pact(q, 'reconcile_account', { account_id: 'main', from: '2026-10-20', to: '2026-10-29' }, l);
+  assert.equal(off.unexplained, cents2(-100 + 1.88));
+  assert.match(off.reading, /não fecha/);
+
+  // Without a linked bank account: the movements only.
+  q.deps.bankAccounts = async () => [];
+  const alone = await pact(q, 'reconcile_account', { account_id: 'main', from: '2026-10-20', to: '2026-10-29' }, l);
+  assert.deepEqual([alone.bank_balance, alone.difference, alone.unexplained], [null, null, null]);
+  await assert.rejects(pact(q, 'reconcile_account', { account_id: 'main', from: '2026-07-01', to: '2026-10-29' }, l), /92 dias/);
+  await assert.rejects(pact(q, 'reconcile_account', { account_id: 'main', from: '2026-10-29', to: '2026-10-20' }, l), ToolInputError);
+  await assert.rejects(pact(q, 'reconcile_account', { account_id: 'nope' }, l), ToolInputError);
+  const older = smartQueue();
+  assert.match((await pact(older, 'reconcile_account', { account_id: 'main' }, l)).note, /Atualize o servidor/);
+  assert.equal(q.items.length, 0, 'reading never queues');
 });
 
 await test('bank accounts: the next due date is never a day that has passed', async () => {
