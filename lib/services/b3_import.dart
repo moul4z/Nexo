@@ -1,6 +1,7 @@
 import 'package:excel/excel.dart';
 import 'text_normalize.dart';
-import '../investments/investment_models.dart' show normalizeTicker;
+import '../investments/investment_models.dart'
+    show InvestmentOperation, investmentScale, normalizeTicker;
 
 /// One trade from the B3 investor area export ("Negociação", Excel).
 /// Columns the file carries: Data do Negócio, Tipo de Movimentação
@@ -27,6 +28,18 @@ class B3Trade {
   /// created twice.
   String get fingerprint =>
       'b3:${date.toIso8601String().substring(0, 10)}:$kind:$ticker:$quantity:$totalCents';
+
+  /// The trade as the portfolio stores it. The file counts whole shares; the
+  /// portfolio keeps quantities with six decimal places.
+  InvestmentOperation toOperation(String investmentId, {DateTime? createdAt}) =>
+      InvestmentOperation(
+          id: fingerprint,
+          investmentId: investmentId,
+          kind: kind,
+          quantity: quantity * investmentScale,
+          cents: totalCents,
+          date: date,
+          createdAt: createdAt ?? DateTime.now());
 }
 
 class B3ImportResult {

@@ -548,14 +548,7 @@ extension _B3 on _InvestmentsScreenState {
     for (final t in fresh) {
       try {
         var inv = byTicker[t.ticker];
-        final op = InvestmentOperation(
-            id: t.fingerprint,
-            investmentId: inv?.id ?? const Uuid().v4(),
-            kind: t.kind,
-            quantity: t.quantity,
-            cents: t.totalCents,
-            date: t.date,
-            createdAt: DateTime.now());
+        final op = t.toOperation(inv?.id ?? const Uuid().v4());
         if (inv == null) {
           if (t.kind == 'sell') continue; // nothing to sell from
           inv = Investment(
@@ -1404,7 +1397,7 @@ class _OperationDialogState extends State<_OperationDialog> {
     }
     final units = kind == 'income' ? 0 : parseInvestmentQuantity(quantity.text);
     final value = parseMoney(amount.text);
-    final rate = foreign ? parseMoney(fx.text) : 1.0;
+    final rate = foreign ? parseRate(fx.text) : 1.0;
     final withheld = foreign && kind == 'income' && tax.text.trim().isNotEmpty
         ? parseMoney(tax.text)
         : 0.0;
@@ -1484,7 +1477,7 @@ class _OperationDialogState extends State<_OperationDialog> {
 
   /// The total in reais the rate gives, so a typo in the rate shows up.
   String _brlLine() {
-    final value = parseMoney(amount.text), rate = parseMoney(fx.text);
+    final value = parseMoney(amount.text), rate = parseRate(fx.text);
     if (value == null || rate == null || value <= 0 || rate <= 0) {
       return 'Da nota da corretora ou do câmbio que você fez.';
     }
@@ -1838,7 +1831,8 @@ class _PriceDialogState extends State<_PriceDialog> {
                 onPressed: busy
                     ? null
                     : () async {
-                        final value = parseMoney(price.text);
+                        // A quote has more than two decimal places.
+                        final value = parseRate(price.text);
                         if (value == null || value < 0) {
                           setState(() => error = 'Informe um preço válido.');
                           return;

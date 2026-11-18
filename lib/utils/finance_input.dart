@@ -2,8 +2,18 @@ import 'package:intl/intl.dart';
 
 /// Parses money typed in either Brazilian format (1.234,56 / 1234,56)
 /// or international format (1,234.56 / 1234.56).
-double? parseMoney(String raw) {
+double? parseMoney(String raw) => parseDecimal(raw);
+
+/// An exchange rate or a unit price: up to six decimal places, and a lone
+/// dot is always the decimal mark (a rate has no thousands).
+double? parseRate(String raw) =>
+    parseDecimal(raw, decimals: 6, thousands: false);
+
+/// A number typed in the Brazilian or the international format, with at
+/// most [decimals] decimal places. With [thousands], "1.234" is 1234.
+double? parseDecimal(String raw, {int decimals = 2, bool thousands = true}) {
   var value = raw
+      .replaceAll('US\$', '')
       .replaceAll('R\$', '')
       .replaceAll('\u00A0', '')
       .replaceAll(' ', '')
@@ -21,11 +31,11 @@ double? parseMoney(String raw) {
     }
   } else if (hasComma) {
     value = value.replaceAll('.', '').replaceAll(',', '.');
-  } else if (RegExp(r'^-?\d{1,3}(\.\d{3})+$').hasMatch(value)) {
+  } else if (thousands && RegExp(r'^-?\d{1,3}(\.\d{3})+$').hasMatch(value)) {
     value = value.replaceAll('.', '');
   }
 
-  if (!RegExp(r'^-?\d+(\.\d{1,2})?$').hasMatch(value)) return null;
+  if (!RegExp('^-?\\d+(\\.\\d{1,$decimals})?\$').hasMatch(value)) return null;
   final parsed = double.tryParse(value);
   return parsed != null && parsed.isFinite ? parsed : null;
 }

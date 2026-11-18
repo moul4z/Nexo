@@ -1,5 +1,6 @@
 import 'package:excel/excel.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nexo/investments/investment_models.dart';
 import 'package:nexo/services/b3_import.dart';
 
 /// The B3 investor-area "Negociação" export, rebuilt in memory.
@@ -88,6 +89,35 @@ void main() {
     expect(sell.totalCents, 16040);
     expect(sell.fingerprint, 'b3:2026-10-12:sell:PETR4:4:16040');
     expect(result.skipped, ['linha 5: data ilegível']);
+  });
+
+  test('an imported trade enters the portfolio as whole shares', () {
+    // The file counts shares; the portfolio stores six decimal places. Ten
+    // shares used to be stored as 0.00001 of a share.
+    final trade = B3Trade(
+        date: DateTime(2026, 9, 5),
+        kind: 'buy',
+        ticker: 'PETR4',
+        institution: 'CORRETORA EXEMPLO',
+        quantity: 10,
+        priceCents: 3850,
+        totalCents: 38500,
+        market: 'Mercado à Vista');
+    final op = trade.toOperation('inv', createdAt: DateTime(2026, 9, 5));
+    expect(op.id, trade.fingerprint);
+    expect(op.quantity, 10 * investmentScale);
+    final position = InvestmentPosition(
+        Investment(
+            id: 'inv',
+            name: 'PETR4',
+            assetClass: 'Ações',
+            ticker: 'PETR4',
+            priceMicros: trade.priceCents * 10000,
+            priceAt: trade.date),
+        [op]);
+    expect(position.quantity, 10 * investmentScale);
+    expect(position.value, 38500, reason: '10 shares at R\$ 38,50');
+    expect(position.averageCost, 3850);
   });
 
   test('a sheet without the expected header yields nothing, not an error', () {
