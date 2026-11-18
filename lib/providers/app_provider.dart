@@ -2396,19 +2396,29 @@ class AppProvider extends ChangeNotifier {
     return savingsContributions.where((c) => c.goalId == goalId).toList();
   }
 
+  /// [id]: a fixed id for the movement, so the same request applied twice
+  /// (by two devices) is one movement.
   Future<void> contributeToGoal(
           {required String goalId,
           required String fromAccountId,
           required double amount,
-          String note = ''}) =>
-      _moveGoal(goalId, fromAccountId, amount, note, true);
+          String note = '',
+          String? id}) =>
+      _moveGoal(goalId, fromAccountId, amount, note, true, id);
 
   Future<void> withdrawFromGoal(
           {required String goalId,
           required String toAccountId,
           required double amount,
-          String note = ''}) =>
-      _moveGoal(goalId, toAccountId, amount, note, false);
+          String note = '',
+          String? id}) =>
+      _moveGoal(goalId, toAccountId, amount, note, false, id);
+
+  /// Whether a goal movement with this id was already registered.
+  Future<bool> goalMovementExists(String id) async =>
+      (await (await DBHelper.database).query('savings_contributions',
+              columns: ['id'], where: 'id = ?', whereArgs: [id], limit: 1))
+          .isNotEmpty;
 
   /// Changes what a goal holds without moving any account: for a reserve
   /// that is only bookkeeping (the money never left the account), so taking
@@ -2417,7 +2427,8 @@ class AppProvider extends ChangeNotifier {
       {required String goalId,
       required double amount,
       required bool deposit,
-      String note = ''}) async {
+      String note = '',
+      String? id}) async {
     if (!amount.isFinite || amount <= 0) {
       throw ArgumentError('Informe um valor positivo.');
     }
@@ -2437,7 +2448,7 @@ class AppProvider extends ChangeNotifier {
       await txn.insert(
           'savings_contributions',
           SavingsContribution(
-                  id: newId(),
+                  id: id ?? newId(),
                   goalId: goalId,
                   accountId: '',
                   amount: amount,
@@ -2462,8 +2473,9 @@ class AppProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _moveGoal(String goalId, String accountId, double amount,
-      String note, bool deposit) async {
+  Future<void> _moveGoal(
+      String goalId, String accountId, double amount, String note, bool deposit,
+      [String? id]) async {
     if (!amount.isFinite || amount <= 0)
       throw ArgumentError('Informe um valor positivo.');
     final account = accountById(accountId);
@@ -2492,7 +2504,7 @@ class AppProvider extends ChangeNotifier {
       await txn.insert(
           'savings_contributions',
           SavingsContribution(
-                  id: newId(),
+                  id: id ?? newId(),
                   goalId: goalId,
                   accountId: accountId,
                   amount: goalAmount,

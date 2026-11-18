@@ -341,16 +341,25 @@ void main() {
         targetAmount: 5000,
         currency: 'BRL',
         colorValue: 0));
-    queue.add('d', 'goal.move', {
+    final goalDeposit = {
       'goal_id': 'g',
       'account_id': 'bank',
       'amount_cents': 20000,
       'direction': 'deposit',
       'note': ''
-    });
+    };
+    queue.add('d', 'goal.move', goalDeposit);
     await run();
     expect(queue.finished['d']!.$1, 'done');
     expect(await balance('bank'), 800);
+    // Offered again to a device without memory of the request: the goal
+    // movement has the id of the request, so it is not made twice.
+    SharedPreferences.setMockInitialValues({});
+    queue.add('d', 'goal.move', goalDeposit);
+    await AssistantCommands(queue, app)
+        .run(datasetId: 'd', deviceId: 'other-device');
+    expect(queue.finished['d']!.$2['message'], contains('já estava'));
+    expect(await balance('bank'), 800, reason: 'saved once');
 
     await app.addAccount(Account(
         id: 'cc',

@@ -614,14 +614,21 @@ class AssistantCommands {
           throw StateError('O objetivo não existe mais.');
         }
         final deposit = a['direction'] == 'deposit';
+        // Applied already by another device: one movement, not two.
+        final moveId = 'assistant:${c.id}';
+        if (await app.goalMovementExists(moveId)) {
+          return {'message': 'Este movimento do objetivo já estava feito.'};
+        }
         if (deposit) {
           await app.contributeToGoal(
+              id: moveId,
               goalId: a['goal_id'] as String,
               fromAccountId: account.id,
               amount: _reais(a['amount_cents']),
               note: a['note'] as String? ?? '');
         } else {
           await app.withdrawFromGoal(
+              id: moveId,
               goalId: a['goal_id'] as String,
               toAccountId: account.id,
               amount: _reais(a['amount_cents']),

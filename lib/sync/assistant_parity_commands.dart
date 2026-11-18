@@ -432,7 +432,12 @@ class AssistantParityCommands {
           throw StateError('O objetivo não existe mais.');
         }
         final deposit = a['direction'] == 'deposit';
+        // Applied already by another device: one adjustment, not two.
+        if (await app.goalMovementExists('assistant:$commandId')) {
+          return {'message': 'Este ajuste do objetivo já estava feito.'};
+        }
         await app.adjustGoal(
+            id: 'assistant:$commandId',
             goalId: a['goal_id'] as String,
             amount: _reais(a['amount_cents']),
             deposit: deposit,
