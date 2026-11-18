@@ -1,7 +1,24 @@
 import '../models/models.dart';
 import '../models/transaction_metadata.dart';
+import 'text_normalize.dart';
 
 class FinanceRules {
+  /// A category the person made for fixing a balance ("Ajuste de saldo",
+  /// "Acerto"). Fixing a balance is never income or spending: what is
+  /// entered there is kept as a neutral adjustment.
+  static bool isAdjustmentCategory(String name) {
+    final n = normalizeText(name).trim();
+    return const {
+      'ajuste de saldo',
+      'ajustes de saldo',
+      'ajuste',
+      'ajustes',
+      'acerto de saldo',
+      'acerto',
+      'correcao de saldo',
+    }.contains(n);
+  }
+
   /// Entries older than the explicit mark, recognised by their text. Only
   /// without a category: a real expense always has one, even when the bank
   /// calls it "Transferência enviada - Fulano" or "Pagamento fatura de luz".

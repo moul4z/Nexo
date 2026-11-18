@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../providers/app_provider.dart';
 import '../services/transaction_metadata_service.dart';
+import '../services/finance_rules.dart';
 import '../theme/app_theme.dart';
 import '../utils/finance_input.dart';
 import '../widgets/shared_widgets.dart' show CategoryDot, showCurrencyPicker;
@@ -521,12 +522,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       } else {
         await app.addTransaction(transaction, metadata: metadata);
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text(
-                'Não foi possível salvar. Revise os campos. Para alterar uma transferência, exclua e registre novamente.')));
+        // What the app refuses with a reason is told with the reason.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e is StateError
+                ? e.message
+                : 'Não foi possível salvar. Revise os campos. Para alterar uma transferência, exclua e registre novamente.')));
       }
       return;
     }
@@ -992,6 +995,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                       padding: const EdgeInsets.only(top: 6),
                       child: Text('Escolha uma categoria.',
                           style: TextStyle(color: cs.error)),
+                    ),
+                  if (!isEdit &&
+                      FinanceRules.isAdjustmentCategory(
+                          app.categoryById(_categoryId ?? '')?.name ?? ''))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                          'Acerto de saldo: fica gravado como ajuste neutro. Mexe no saldo da conta e não conta como receita nem gasto.',
+                          style: TextStyle(color: cs.onSurfaceVariant)),
                     ),
                   if (subcategories.isNotEmpty) ...[
                     const SizedBox(height: 16),

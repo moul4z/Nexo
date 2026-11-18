@@ -1061,6 +1061,51 @@ class AppProvider extends ChangeNotifier {
     await FinancialReminders.instance.refresh(this);
   }
 
+  /// Fixing a balance is never income or spending. An entry typed (or asked
+  /// by the assistant, or confirmed from the bank) in the person's
+  /// "Ajuste de saldo" category moves the balance the same way and is kept
+  /// as a neutral adjustment, like the account's own "ajustar saldo".
+  TransactionMetadata _asAdjustment(AppTransaction t, TransactionMetadata m) {
+    final category = categoryById(t.categoryId);
+    if (category == null || !FinanceRules.isAdjustmentCategory(category.name)) {
+      return m;
+    }
+    final plain = m.source == 'manual' ||
+        m.source == 'assistant' ||
+        m.source.startsWith('notification');
+    if (!plain || m.excludeFromSpending) return m;
+    if (m.isPending) {
+      throw StateError(
+          'Acerto de saldo não fica pendente: ele já aconteceu. Escolha outra categoria ou lance como pago.');
+    }
+    if ((m.installmentTotal ?? 1) > 1) {
+      throw StateError('Ajuste de saldo não se divide em parcelas.');
+    }
+    return TransactionMetadata.fromMap({
+      ...m.toMap(),
+      'exclude_from_spending': 1,
+      'source': 'opening_balance',
+    });
+  }
+
+  /// Old entries in an "Ajuste de saldo" category that still count as
+  /// income or spending: offered for conversion with
+  /// [markAsBalanceAdjustment].
+  List<AppTransaction> get adjustmentsCountedAsMoney {
+    final ids = {
+      for (final c in categories)
+        if (FinanceRules.isAdjustmentCategory(c.name)) c.id
+    };
+    if (ids.isEmpty) return const [];
+    return [
+      for (final t in transactions)
+        if (ids.contains(t.categoryId) &&
+            !FinanceRules.isNeutral(t, transactionMetadata[t.id]) &&
+            transactionMetadata[t.id]?.isPending != true)
+          t
+    ];
+  }
+
   Future<void> addTransaction(AppTransaction t,
       {TransactionMetadata? metadata,
       bool generateInstallments = true,
@@ -1072,7 +1117,8 @@ class AppProvider extends ChangeNotifier {
         !['income', 'expense'].contains(t.type)) {
       throw ArgumentError('Conta, tipo ou valor inválido.');
     }
-    final meta = metadata ?? TransactionMetadata(transactionId: t.id);
+    final meta =
+        _asAdjustment(t, metadata ?? TransactionMetadata(transactionId: t.id));
     await ledgerTransaction(db, 'transaction.add', (txn) async {
       if (suggestionId != null)
         await DBHelper.confirmSuggestion(txn, suggestionId, t.id);

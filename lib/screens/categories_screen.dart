@@ -38,6 +38,8 @@ class CategoriesScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 140),
         children: [
+          if (app.adjustmentsCountedAsMoney.isNotEmpty)
+            _OldAdjustments(entries: app.adjustmentsCountedAsMoney),
           SectionHeader(title: l10n.categories_expenseCategories),
           ReorderableListView.builder(
             shrinkWrap: true,
@@ -495,6 +497,54 @@ class _CategorySheetState extends State<_CategorySheet> {
                     : l10n.categories_addCategory),
               ),
             ]),
+      ),
+    );
+  }
+}
+
+/// Old entries in the person's "Ajuste de saldo" category still count as
+/// income or spending. One tap makes them neutral adjustments: the balances
+/// stay as they are.
+class _OldAdjustments extends StatelessWidget {
+  const _OldAdjustments({required this.entries});
+  final List<AppTransaction> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 14),
+      color: cs.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+              '${ptCount(entries.length, 'acerto de saldo antigo', 'acertos de saldo antigos')} ${entries.length == 1 ? 'conta' : 'contam'} como receita ou gasto',
+              style: TextStyle(
+                  fontWeight: FontWeight.w600, color: cs.onSecondaryContainer)),
+          const SizedBox(height: 4),
+          Text(
+              'Acertar o saldo não é ganhar nem gastar. Convertendo, o saldo das contas fica igual e os meses deixam de contar esses valores.',
+              style: TextStyle(color: cs.onSecondaryContainer)),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+                onPressed: () async {
+                  final app = context.read<AppProvider>();
+                  try {
+                    final n = await app.markAsBalanceAdjustment(
+                        [for (final t in entries) t.id]);
+                    if (context.mounted) {
+                      showAppSnackbar(context,
+                          '${ptCount(n, 'lançamento')} agora ${n == 1 ? 'é' : 'são'} ajuste de saldo.');
+                    }
+                  } on StateError catch (e) {
+                    if (context.mounted) showAppSnackbar(context, e.message);
+                  }
+                },
+                child: const Text('Converter em ajuste neutro')),
+          ),
+        ]),
       ),
     );
   }

@@ -7,6 +7,7 @@ import 'package:nexo/database/db_helper.dart';
 import 'package:nexo/models/models.dart';
 import 'package:nexo/providers/app_provider.dart';
 import 'package:nexo/services/transaction_metadata_service.dart';
+import 'package:nexo/services/finance_rules.dart';
 import 'package:nexo/services/card_invoice_service.dart';
 import 'package:nexo/services/finance_export_service.dart';
 import 'package:excel/excel.dart' hide Border;
@@ -736,6 +737,47 @@ void main() {
         app.withdrawFromGoal(goalId: 'g', toAccountId: 'bank', amount: 200),
         throwsStateError);
     expect(app.accountById('bank')!.balance, 850);
+  });
+  test('An entry in the balance-fix category is a neutral adjustment',
+      () async {
+    // Fixing a balance is never income or spending (rodada 1.18, P4.1).
+    await app.addCategory(AppCategory(
+        id: 'fix', name: 'Ajuste de saldo', type: 'income', colorValue: 0));
+    await app.addTransaction(AppTransaction(
+        id: 'fix1',
+        type: 'income',
+        amount: 12.34,
+        description: 'Acerto com o extrato',
+        accountId: 'bank',
+        categoryId: 'fix',
+        date: DateTime(2026, 11, 10)));
+    expect(app.accountById('bank')!.balance, closeTo(1012.34, 1e-9),
+        reason: 'the balance moves as typed');
+    final meta = app.transactionMetadata['fix1']!;
+    expect(meta.excludeFromSpending, isTrue);
+    expect(meta.source, 'opening_balance');
+    expect(FinanceRules.isNeutral(app.transactions.single, meta), isTrue);
+    expect(app.adjustmentsCountedAsMoney, isEmpty);
+    // A pending one is refused: an adjustment has already happened.
+    await expectLater(
+        app.addTransaction(
+            AppTransaction(
+                id: 'fix2',
+                type: 'income',
+                amount: 5,
+                description: 'Acerto',
+                accountId: 'bank',
+                categoryId: 'fix',
+                date: DateTime(2026, 11, 10)),
+            metadata: const TransactionMetadata(
+                transactionId: 'fix2', status: 'pending')),
+        throwsStateError);
+    for (final name in ['Ajuste', 'acerto de saldo', 'AJUSTE DE SALDO ']) {
+      expect(FinanceRules.isAdjustmentCategory(name), isTrue, reason: name);
+    }
+    for (final name in ['Ajuste de aluguel', 'Salário', 'Reajuste']) {
+      expect(FinanceRules.isAdjustmentCategory(name), isFalse, reason: name);
+    }
   });
   test('Everything saved in cents can be taken out, to the cent', () async {
     // Three deposits of 0.10 add up to 0.30000000000000004: taking 0.30
