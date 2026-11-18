@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,6 +27,17 @@ abstract final class DesktopProfile {
   static String testName = '';
   static bool _configured = false;
 
+  /// A development build (`flutter run`, a debug or profile executable) of
+  /// the Windows app never opens the person's database: a newer schema would
+  /// upgrade the file and the installed version could no longer open it. It
+  /// uses the synthetic profile `dev` instead; `--real-data` is the explicit
+  /// way in.
+  static bool developmentProfile(
+          {required bool release,
+          required bool test,
+          required List<String> arguments}) =>
+      !release && !test && !arguments.contains('--real-data');
+
   /// Appended to every QA storage key so named profiles never share secrets.
   static String get qaSuffix => testName.isEmpty ? '' : '_$testName';
 
@@ -43,6 +55,11 @@ abstract final class DesktopProfile {
             isTest = true;
             testName = name;
           }
+        }
+        if (developmentProfile(
+            release: kReleaseMode, test: isTest, arguments: arguments)) {
+          isTest = true;
+          testName = 'dev';
         }
       }
       if (Platform.isAndroid) {

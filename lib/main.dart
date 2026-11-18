@@ -1,11 +1,14 @@
 // lib/main.dart
 import 'dart:async';
+import 'dart:ui' show PlatformDispatcher;
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:dynamic_color/dynamic_color.dart';
+import 'database/db_helper.dart' show NewerDatabaseException;
 import 'providers/app_provider.dart';
+import 'services/diagnostics.dart';
 import 'services/budget_notification_service.dart';
 import 'services/daily_reminder_service.dart';
 import 'l10n/app_localizations.dart';
@@ -41,6 +44,7 @@ final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 void main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
+  _recordUncaughtErrors();
   // A headless pass of the assistant's queue may be writing: wait for it
   // before this isolate opens the database.
   await ClaudeQueue.waitForHeadless();
@@ -48,7 +52,9 @@ void main(List<String> arguments) async {
   try {
     await DesktopProfile.initialize(arguments);
     await startNexo();
-  } catch (_) {
+  } catch (e) {
+    Diagnostics.note('abertura', e);
+    final newer = e is NewerDatabaseException;
     runApp(MaterialApp(
         home: Scaffold(
             body: Center(
@@ -57,8 +63,10 @@ void main(List<String> arguments) async {
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.folder_off_outlined, size: 48),
         const Text('Não foi possível abrir o Nexo.'),
-        const Text(
-            'Confira espaço e permissão na pasta de dados. Nenhum banco foi apagado. Feche outras janelas do Nexo e tente novamente.',
+        Text(
+            newer
+                ? 'Seus dados foram gravados por uma versão mais nova do Nexo. Atualize o app neste aparelho. Nada foi alterado nem apagado.'
+                : 'Confira espaço e permissão na pasta de dados. Nenhum banco foi apagado. Feche outras janelas do Nexo e tente novamente.',
             textAlign: TextAlign.center),
         FilledButton(
             onPressed: () => main(arguments),
@@ -66,6 +74,21 @@ void main(List<String> arguments) async {
       ]),
     )))));
   }
+}
+
+/// A failure outside any `try` (a widget that throws while building, an
+/// unawaited future) used to vanish. It is counted in Ajuda › Diagnóstico,
+/// without numbers, and still reaches Flutter's own handler.
+void _recordUncaughtErrors() {
+  final previous = FlutterError.onError;
+  FlutterError.onError = (details) {
+    Diagnostics.note('interface', details.exceptionAsString());
+    previous?.call(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    Diagnostics.note('app', error);
+    return false; // not handled: the platform still reports it
+  };
 }
 
 Future<void> startNexo() async {

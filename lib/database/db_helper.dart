@@ -1,6 +1,8 @@
 // lib/database/db_helper.dart
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart' hide Transaction;
 import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart';
@@ -9,6 +11,17 @@ import 'database_platform.dart';
 import '../investments/investment_repository.dart';
 import '../sync/ledger_capture.dart';
 import '../services/notification_inbox.dart' show NotificationInbox;
+import '../services/diagnostics.dart';
+
+/// The file was written by a newer Nexo. Opening it with this version could
+/// drop what the newer one stores, so it is refused and nothing is touched.
+class NewerDatabaseException implements Exception {
+  const NewerDatabaseException(this.fileVersion, this.appVersion);
+  final int fileVersion, appVersion;
+  @override
+  String toString() =>
+      'Este banco é de uma versão mais nova do Nexo (schema $fileVersion; este app usa $appVersion).';
+}
 
 class DBHelper {
   static Database? _db;
@@ -38,14 +51,61 @@ class DBHelper {
 
   static Future<Database> _open() async {
     final path = await DatabasePlatform.path;
+    await _copyBeforeUpgrade(path);
     final db = await openDatabase(path,
-        version: _version, onCreate: _onCreate, onUpgrade: _onUpgrade);
+        version: _version,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+        onDowngrade: (_, oldV, newV) =>
+            throw NewerDatabaseException(oldV, newV));
     // A synced device must capture tables added by later schema versions
     // (CREATE TRIGGER IF NOT EXISTS: nothing changes when already present).
     if (await LedgerCapture.isInstalled(db)) {
       await LedgerCapture.ensureTriggers(db);
     }
     return db;
+  }
+
+  /// Folder of the copies made before a schema upgrade, beside the database.
+  static const upgradeCopies = 'backups';
+  static const _copyPrefix = 'antes-do-schema-';
+
+  /// Before a schema upgrade touches the file, keeps a copy of it beside the
+  /// database (the last three). The upgrades only add tables and columns,
+  /// so a failure to copy is recorded and does not stop the app.
+  static Future<void> _copyBeforeUpgrade(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return;
+      // Without a version nothing is created or migrated.
+      final plain = await openDatabase(path, singleInstance: false);
+      final int old;
+      try {
+        old = Sqflite.firstIntValue(
+                await plain.rawQuery('PRAGMA user_version')) ??
+            0;
+        if (old <= 0 || old >= _version) return;
+        // Everything committed goes into the main file before the copy.
+        await plain.rawQuery('PRAGMA wal_checkpoint(TRUNCATE)');
+      } finally {
+        await plain.close();
+      }
+      final dir = Directory(p.join(p.dirname(path), upgradeCopies));
+      await dir.create(recursive: true);
+      final stamp = DateFormat('yyyyMMdd-HHmmss').format(DateTime.now());
+      await file
+          .copy(p.join(dir.path, '$_copyPrefix$_version-de-$old-$stamp.db'));
+      final copies = [
+        await for (final f in dir.list())
+          if (f is File && p.basename(f.path).startsWith(_copyPrefix)) f
+      ]..sort((a, b) => a.lastModifiedSync().compareTo(b.lastModifiedSync()));
+      for (final extra
+          in copies.take(copies.length > 3 ? copies.length - 3 : 0)) {
+        await extra.delete();
+      }
+    } catch (e) {
+      Diagnostics.note('banco', e);
+    }
   }
 
   static Future<void> _onUpgrade(Database db, int oldV, int newV) async {
