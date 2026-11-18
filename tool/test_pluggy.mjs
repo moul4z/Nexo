@@ -171,6 +171,13 @@ function fakeStore(items) {
         if (r.action === 'insert' && !old) { rows.set(r.external_id, { ...r, review: 'pending' }); n++; }
         if (r.action === 'update' && old?.review === 'pending') { rows.set(r.external_id, { ...r, review: 'pending' }); n++; }
         if (r.action === 'flag_changed' && old && old.review !== 'pending') { old.changed = true; old.source_updated_at = r.source_updated_at; n++; }
+        // Like the SQL: only the newer fields, a null never erases.
+        if (r.action === 'annotate' && old) {
+          for (const f of ['direction', 'operation_ref', 'payment_ref', 'same_owner', 'counterparty']) {
+            if (r[f] !== null && r[f] !== undefined) old[f] = r[f];
+          }
+          n++;
+        }
       }
       return n;
     },
@@ -182,6 +189,50 @@ const source = (txs, item = { status: 'UPDATED' }) => ({
   transactions: async () => txs,
 });
 const now = new Date('2026-10-20T12:00:00.000Z');
+
+await test('what the reconciliation needs: direction, operation ids, same owner and who was on the other side', () => {
+  const cpf = { type: 'CPF', value: '123.456.789-09' };
+  const out = toSuggestion(tx({ description: 'Pix enviado', providerId: 'E2E.000/1:a-b', paymentData: {
+    payer: { name: 'ANA TESTE', documentNumber: cpf },
+    receiver: { name: '  Ana   Teste ', documentNumber: { type: 'CPF', value: '12345678909' } },
+    referenceNumber: 'REF-9' } }), bank);
+  assert.deepEqual([out.direction, out.same_owner, out.counterparty, out.payment_ref],
+    ['out', true, 'Ana Teste', 'REF-9']);
+  assert.equal(out.description, 'Pix enviado - Ana Teste', 'a bare "Pix enviado" says who received');
+  assert.equal(out.operation_ref, 'E2E.000/1:a-b');
+  // An id with anything else in it is dropped, never stored half-clean.
+  assert.equal(toSuggestion(tx({ providerId: 'tem espaço; drop' }), bank).operation_ref, null);
+  // The tax number itself is never kept: only the comparison.
+  assert.ok(!JSON.stringify(out).includes('12345678909'));
+  const other = toSuggestion(tx({ type: 'CREDIT', description: 'Pix recebido', paymentData: {
+    payer: { name: 'Loja Exemplo LTDA', documentNumber: { type: 'CNPJ', value: '11.222.333/0001-81' } },
+    receiver: { name: 'Ana Teste', documentNumber: cpf } } }), bank);
+  assert.deepEqual([other.direction, other.same_owner, other.counterparty], ['in', false, 'Loja Exemplo LTDA']);
+  // Without both documents nobody guesses the owner.
+  const unknown = toSuggestion(tx({ description: 'Mercado Fictício', paymentData: { receiver: { name: 'Mercado' } } }), bank);
+  assert.equal(unknown.same_owner, null);
+  assert.equal(unknown.description, 'Mercado Fictício', 'a real description is kept as the bank wrote it');
+  const plain = toSuggestion(tx(), bank);
+  assert.deepEqual([plain.direction, plain.operation_ref, plain.payment_ref, plain.same_owner, plain.counterparty],
+    ['out', null, null, null, null]);
+  // A yield arrives as money in, even when the kind is "transfer".
+  assert.equal(toSuggestion(tx({ type: 'CREDIT', description: 'Rendimentos' }), bank).direction, 'in');
+});
+
+await test('rows stored before 1.18 get the new fields without touching amounts or decisions', async () => {
+  const old = { ...toSuggestion(tx(), bank), direction: null, counterparty: null, review: 'confirmed' };
+  const fresh = toSuggestion(tx({ paymentData: { receiver: { name: 'Mercado Exemplo' } }, merchant: { name: 'Mercado Exemplo' } }), bank);
+  assert.equal(merge(old, fresh).action, 'annotate');
+  assert.equal(merge({ ...fresh, review: 'confirmed' }, fresh).action, 'keep', 'nothing new: nothing written');
+  // A material change of a decided row still only flags it.
+  const changed = toSuggestion(tx({ amount: -40, updatedAt: '2026-10-21T10:00:00.000Z' }), bank);
+  assert.equal(merge(old, changed).action, 'flag_changed');
+  const store = fakeStore([{ item_id: 'item-1', label: 'Banco', last_fetch_at: null }]);
+  store.rows.set('pluggy:tx-1', { ...old });
+  await syncOwner('owner', source([tx({ merchant: { name: 'Mercado Exemplo' } })]), store, { now });
+  const row = store.rows.get('pluggy:tx-1');
+  assert.deepEqual([row.review, row.amount_cents, row.direction, row.counterparty], ['confirmed', 3290, 'out', 'Mercado Exemplo']);
+});
 
 await test('sync: new transactions become pending suggestions, skips counted', async () => {
   const store = fakeStore([{ item_id: 'item-1', label: 'Banco', last_fetch_at: null }]);

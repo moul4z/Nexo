@@ -840,6 +840,87 @@ try {
       await denies(() => user(A, tx => rpc(tx, 'nexo_market_store', [rows([['2026-11-13', 5]]), 'quote']), role), '42501');
     }
   });
+  // ── 1.18: what the reconciliation needs from each bank movement ──────
+  await db.exec(await readFile(new URL('../supabase/migrations/202611180001_reconcile.sql', import.meta.url), 'utf8'));
+  await test('reconcile: old rows get a direction; new fields are stored, annotated and listed', async () => {
+    const item2 = 'item-ficticio-0099';
+    const mine = async () => await user(A, tx => rpc(tx, 'nexo_pluggy_suggestions', [0]));
+    // Stored before the migration, as an expense: it left the account.
+    assert.equal((await mine()).find(r => r.id === 'pluggy:s2').direction, 'out');
+    await service('nexo_pluggy_store', [A, item2, null, JSON.stringify([
+      sugg('n1', { kind: 'transfer', direction: 'in', operation_ref: 'OP-1', payment_ref: 'E2E.1/a:b',
+        same_owner: true, counterparty: 'Pessoa Exemplo', description: 'Pix recebido - Pessoa Exemplo' }),
+      sugg('n2', { direction: 'out' })])]);
+    const n1 = (await mine()).find(r => r.id === 'pluggy:n1');
+    assert.deepEqual([n1.direction, n1.operation_ref, n1.payment_ref, n1.same_owner, n1.counterparty, n1.manual],
+      ['in', 'OP-1', 'E2E.1/a:b', true, 'Pessoa Exemplo', false]);
+    assert.deepEqual([n1.bank, n1.account_id, n1.nexo_account_id], ['Banco fictício', 'acc-1', null]);
+    // The bank account linked to a Nexo account travels with the movement.
+    await db.query(`insert into nexo_pluggy_private.accounts(owner_id, account_id, item_id, type, name, currency, nexo_account_id)
+      values ($1, 'acc-1', $2, 'BANK', 'Conta fictícia', 'BRL', 'main')`, [A, item2]).catch(async () => {
+      // Columns differ between versions of the accounts table: link through the public function instead.
+      await service('nexo_pluggy_store_accounts', [A, item2, null, JSON.stringify([{ account_id: 'acc-1', type: 'BANK',
+        subtype: 'CHECKING_ACCOUNT', name: 'Conta fictícia', currency: 'BRL', balance_cents: 100, credit_limit_cents: null,
+        available_cents: null, minimum_payment_cents: null, close_date: null, due_date: null }])]);
+      await user(A, tx => rpc(tx, 'nexo_pluggy_link_account', ['acc-1', 'main']));
+    });
+    assert.equal((await mine()).find(r => r.id === 'pluggy:n1').nexo_account_id, 'main');
+    // Annotate: only the new fields, on a row the person already decided; the decision stays.
+    assert.equal(await user(A, tx => rpc(tx, 'nexo_pluggy_decide', [JSON.stringify([{ id: 'pluggy:n2', review: 'ignored' }])])), 1);
+    assert.equal(await service('nexo_pluggy_store', [A, item2, null, JSON.stringify([
+      sugg('n2', { action: 'annotate', amount_cents: 1, description: 'outra', counterparty: 'Loja Exemplo', direction: 'out' })])]), 1);
+    const n2 = (await mine()).find(r => r.id === 'pluggy:n2');
+    assert.deepEqual([n2.review, n2.amount_cents, n2.description, n2.counterparty], ['ignored', 3290, 'Mercado fictício', 'Loja Exemplo']);
+    assert.equal(await service('nexo_pluggy_store', [A, item2, null, JSON.stringify([
+      sugg('n2', { action: 'annotate', counterparty: 'Loja Exemplo', direction: 'out' })])]), 0, 'nothing new: nothing written');
+    // A null never erases what the bank said before.
+    await service('nexo_pluggy_store', [A, item2, null, JSON.stringify([sugg('n1', { action: 'annotate', direction: 'in' })])]);
+    assert.equal((await mine()).find(r => r.id === 'pluggy:n1').operation_ref, 'OP-1');
+    // References and names are checked by the table.
+    await denies(() => service('nexo_pluggy_store', [A, item2, null, JSON.stringify([sugg('bad1', { operation_ref: 'tem espaço' })])]), '23514');
+    await denies(() => service('nexo_pluggy_store', [A, item2, null, JSON.stringify([sugg('bad2', { direction: 'sideways' })])]), '23514');
+    await denies(() => service('nexo_pluggy_store', [A, item2, null, JSON.stringify([sugg('bad3', { counterparty: 'x'.repeat(61) })])]), '23514');
+    await denies(() => service('nexo_pluggy_store', [A, item2, null, JSON.stringify([sugg('n1', { action: 'rewrite' })])]), '22023');
+  });
+  await test('reconcile: a link stays final, except when the entry made for it was undone; what comes back is manual', async () => {
+    const decide = (who, d) => user(who, tx => rpc(tx, 'nexo_pluggy_decide', [JSON.stringify(d)]));
+    const row = async (id) => (await user(A, tx => rpc(tx, 'nexo_pluggy_suggestions', [0]))).find(r => r.id === id);
+    assert.equal(await decide(A, [{ id: 'pluggy:n1', review: 'confirmed', transaction_id: 'notification:pluggy:n1' }]), 1);
+    assert.equal(await decide(A, [{ id: 'pluggy:n1', review: 'pending' }]), 0, 'a link is final');
+    assert.equal(await decide(A, [{ id: 'pluggy:n1', review: 'ignored' }]), 0);
+    assert.equal(await decide(A, [{ id: 'pluggy:n1', review: 'ignored', reopen: true }]), 0, 'reopen only puts back to pending');
+    assert.equal(await decide(B, [{ id: 'pluggy:n1', review: 'pending', reopen: true }]), 0, 'other people change nothing');
+    assert.equal(await decide(A, [{ id: 'pluggy:n1', review: 'pending', reopen: true }]), 1);
+    const reopened = await row('pluggy:n1');
+    assert.deepEqual([reopened.review, reopened.transaction_id, reopened.manual], ['pending', null, true]);
+    // An ignore undone is manual too: no device decides it by itself again.
+    assert.equal(await decide(A, [{ id: 'pluggy:n2', review: 'pending' }]), 1);
+    assert.equal((await row('pluggy:n2')).manual, true);
+    // It can be decided again, by the person.
+    assert.equal(await decide(A, [{ id: 'pluggy:n1', review: 'confirmed', transaction_id: 'x' }]), 1);
+    assert.equal((await row('pluggy:n1')).manual, true);
+  });
+  await test('reconcile: the assistant reads pending movements with the new fields and the whole period, service only', async () => {
+    await db.query(`update nexo_mcp_private.connectors set revoked_at = now() where owner_id = $1 and revoked_at is null`, [A]);
+    const made = await user(A, tx => rpc(tx, 'nexo_mcp_create_connector', [ds2, 'Claude conciliação']));
+    const conn = (await db.query(`select id from nexo_mcp_private.connectors
+      where token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, [made.token])).rows[0];
+    const pending = await service('nexo_mcp_suggestions', [conn.id, 50]);
+    const n2 = pending.find(r => r.id === 'pluggy:n2');
+    assert.deepEqual([n2.direction, n2.counterparty, n2.manual, n2.account_id, n2.nexo_account_id], ['out', 'Loja Exemplo', true, 'acc-1', 'main']);
+    assert.ok(!pending.some(r => r.id === 'pluggy:n1'), 'confirmed ones are not pending');
+    const all = await service('nexo_mcp_bank_movements', [conn.id, 0, 9007199254740991]);
+    const n1 = all.find(r => r.id === 'pluggy:n1');
+    assert.equal(n1.review, 'confirmed');
+    assert.equal(n1.transaction_id, 'x');
+    assert.ok(all.some(r => r.review === 'ignored'), 'ignored ones are part of the period');
+    assert.deepEqual(await service('nexo_mcp_bank_movements', [conn.id, 1760950000001, 9007199254740991]), []);
+    for (const role of ['anon', 'authenticated']) {
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_bank_movements', [conn.id, 0, 1]), role), '42501');
+    }
+    await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [conn.id]));
+    assert.deepEqual(await service('nexo_mcp_bank_movements', [conn.id, 0, 9007199254740991]), [], 'a revoked connector reads nothing');
+  });
   await test('security sweep: no table of any Nexo schema is readable by another person or anonymously', async () => {
     const tables = (await db.query(`select table_schema, table_name from information_schema.tables
       where table_type = 'BASE TABLE' and (table_schema like 'nexo%' or table_schema = 'public')`)).rows;

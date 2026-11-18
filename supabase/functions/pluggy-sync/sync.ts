@@ -17,7 +17,7 @@ export interface Source {
 
 export interface StoredItem { item_id: string; label: string; last_fetch_at: string | null }
 export type Stored = Suggestion & { review: "pending" | "confirmed" | "ignored" };
-export type Row = Suggestion & { action: "insert" | "update" | "flag_changed" };
+export type Row = Suggestion & { action: "insert" | "update" | "flag_changed" | "annotate" };
 
 export interface Store {
   items(owner: string): Promise<StoredItem[]>;

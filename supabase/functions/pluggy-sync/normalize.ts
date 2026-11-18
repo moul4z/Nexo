@@ -134,8 +134,21 @@ export interface PluggyTransaction {
   accountId: string;
   creditCardMetadata?: { installmentNumber?: number; totalInstallments?: number } | null;
   operationType?: string | null;
+  /// The bank's own id of the transaction (Open Finance transactionId).
+  providerId?: string | null;
+  paymentData?: {
+    payer?: PluggyParty | null;
+    receiver?: PluggyParty | null;
+    referenceNumber?: string | null;
+  } | null;
+  merchant?: { name?: string | null; businessName?: string | null } | null;
   updatedAt: string;
   createdAt?: string;
+}
+
+export interface PluggyParty {
+  name?: string | null;
+  documentNumber?: { type?: string | null; value?: string | null } | null;
 }
 
 export interface Suggestion {
@@ -150,7 +163,36 @@ export interface Suggestion {
   settled: boolean;
   installment: string | null;
   source_updated_at: string;
+  /// Where the money went from this account's point of view. A "transfer"
+  /// alone does not say it.
+  direction: "in" | "out";
+  /// Bank ids that tie a payment to its refund.
+  operation_ref: string | null;
+  payment_ref: string | null;
+  /// Payer and receiver have the same tax number (the number is not kept).
+  same_owner: boolean | null;
+  /// Who paid or received, when the bank tells it.
+  counterparty: string | null;
 }
+
+/// Fields filled in later for rows stored before they existed.
+export const annotationFields = ["direction", "operation_ref", "payment_ref", "same_owner", "counterparty"] as const;
+
+const ref = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return /^[0-9A-Za-z._:/-]{1,80}$/.test(s) ? s : null;
+};
+const digits = (p: PluggyParty | null | undefined): string | null => {
+  const d = String(p?.documentNumber?.value ?? "").replace(/\D/g, "");
+  return d.length >= 11 ? d : null;
+};
+const partyName = (p: PluggyParty | null | undefined): string | null => {
+  const n = String(p?.name ?? "").replace(/\s+/g, " ").trim();
+  return n.length >= 2 ? n.slice(0, 60) : null;
+};
+// A description that says nothing about who: "Pix", "TED", "Pix enviado".
+const GENERIC = /^(pix|ted|doc|transfer[eê]ncia|pagamento)(\s+(enviad[oa]|recebid[oa]|realizad[oa]))?$/i;
 
 export type Skip = { external_id: string; reason: "unsupported_currency" | "invalid" | "zero" };
 
@@ -188,6 +230,13 @@ export function toSuggestion(
   else if (credit) kind = CARD_PAYMENT.test(text) ? "transfer" : "refund";
   else kind = OWN_TRANSFER.test(text) ? "transfer" : "income";
   const meta = tx.creditCardMetadata;
+  const pay = tx.paymentData ?? null;
+  const payer = digits(pay?.payer), receiver = digits(pay?.receiver);
+  // The other side: who received a payment, who sent money in.
+  const counterparty = partyName(tx.type === "DEBIT" ? pay?.receiver : pay?.payer) ??
+    (tx.merchant?.name ? partyName({ name: tx.merchant.name }) : null);
+  let description = (tx.description || tx.descriptionRaw || "Movimentação bancária").replace(/\s+/g, " ").trim();
+  if (counterparty && GENERIC.test(description)) description = `${description} - ${counterparty}`;
   return {
     external_id,
     account_external_id: account.id,
@@ -195,12 +244,17 @@ export function toSuggestion(
     amount_cents: cents,
     kind,
     medium: credit ? "credit" : "bank",
-    description: (tx.description || tx.descriptionRaw || "Movimentação bancária").trim().slice(0, 80),
+    description: description.slice(0, 80),
     occurred_at: Date.parse(tx.date),
     settled: tx.status !== "PENDING",
     installment: meta?.installmentNumber && meta?.totalInstallments
       ? `${meta.installmentNumber}/${meta.totalInstallments}` : null,
     source_updated_at: tx.updatedAt,
+    direction: tx.type === "DEBIT" ? "out" : "in",
+    operation_ref: ref(tx.providerId),
+    payment_ref: ref(pay?.referenceNumber),
+    same_owner: payer && receiver ? payer === receiver : null,
+    counterparty,
   };
 }
 
@@ -209,16 +263,23 @@ export const isSkip = (v: Suggestion | Skip): v is Skip => "reason" in v;
 /// What a refresh should do with a stored suggestion. The person's decision
 /// (confirmed or ignored) is never undone by the bank changing its data.
 export function merge(
-  stored: (Suggestion & { review: "pending" | "confirmed" | "ignored" }) | undefined,
+  stored: (Partial<Suggestion> & Omit<Suggestion, (typeof annotationFields)[number]> & {
+    review: "pending" | "confirmed" | "ignored";
+  }) | undefined,
   incoming: Suggestion,
-): { action: "insert" | "update" | "keep" | "flag_changed"; row: Suggestion } {
+): { action: "insert" | "update" | "keep" | "flag_changed" | "annotate"; row: Suggestion } {
   if (!stored) return { action: "insert", row: incoming };
-  if (incoming.source_updated_at <= stored.source_updated_at) return { action: "keep", row: stored };
+  // Stored before the newer fields existed (or with a guessed direction):
+  // fill them in, nothing else.
+  const missing = annotationFields.some((f) =>
+    incoming[f] !== null && incoming[f] !== undefined && stored[f] !== incoming[f]);
+  const unchanged = { action: missing ? "annotate" as const : "keep" as const, row: missing ? incoming : stored as Suggestion };
+  if (incoming.source_updated_at <= stored.source_updated_at) return unchanged;
   const material = stored.amount_cents !== incoming.amount_cents || stored.kind !== incoming.kind ||
     stored.occurred_at !== incoming.occurred_at;
   if (stored.review === "pending") return { action: "update", row: incoming };
   // Already decided: never rewrite money; only tell the person if it matters.
-  return { action: material ? "flag_changed" : "keep", row: material ? incoming : stored };
+  return material ? { action: "flag_changed", row: incoming } : unchanged;
 }
 
 export interface ItemHealth {
