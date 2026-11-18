@@ -212,7 +212,7 @@
         "amount": 300.0,
         "description": "Transferência enviada",
         "account_id": "bank",
-        "category_id": "food_exp",
+        "category_id": "",
         "date": "2026-10-06T12:00:00.000",
         "note": "",
         "currency": "BRL"
@@ -223,7 +223,7 @@
         "amount": 300.0,
         "description": "Transferência recebida",
         "account_id": "reserve",
-        "category_id": "food_exp",
+        "category_id": "",
         "date": "2026-10-06T12:00:00.000",
         "note": "",
         "currency": "BRL"
@@ -234,7 +234,7 @@
         "amount": 450.0,
         "description": "Pagamento da fatura do cartão",
         "account_id": "bank",
-        "category_id": "food_exp",
+        "category_id": "",
         "date": "2026-10-10T12:00:00.000",
         "note": "",
         "currency": "BRL"
@@ -494,7 +494,7 @@
         "pendingExpense": 0,
         "extraordinary": 0,
         "recurring": 0,
-        "transfers": 30000,
+        "transfers": 0,
         "result": -23290,
         "categories": {
           "food_exp": 25290

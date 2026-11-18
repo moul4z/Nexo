@@ -63,7 +63,11 @@ export function meta(row: Row | undefined): Meta {
   };
 }
 
+// Entries older than the explicit mark, recognised by their text. Only
+// without a category: a real expense always has one, even when the bank
+// calls it "Transferência enviada - Fulano" or "Pagamento fatura de luz".
 export function isImplicitNeutral(tx: Row): boolean {
+  if (text(tx.category_id)) return false;
   const t = `${text(tx.description)} ${text(tx.note)}`.toLowerCase();
   return t.includes("transfer out") ||
     t.includes("transfer in") ||

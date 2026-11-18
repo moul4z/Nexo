@@ -3,6 +3,7 @@ import 'package:nexo/utils/finance_input.dart';
 import 'package:nexo/services/billing_cycle.dart';
 import 'package:nexo/services/ofx_parser.dart';
 import 'package:nexo/models/models.dart';
+import 'package:nexo/services/finance_rules.dart';
 
 void main() {
   test('Brazilian and decimal money input, rejecting malformed values', () {
@@ -14,6 +15,40 @@ void main() {
     expect(parseMoney('1.234'), 1234);
     for (final value in ['', 'abc100', '1,2,3', 'NaN', 'Infinity', '1e3']) {
       expect(parseMoney(value), isNull);
+    }
+  });
+  test('a real expense is never neutral because of what the bank calls it', () {
+    AppTransaction tx(String description, String category) => AppTransaction(
+        id: description,
+        type: 'expense',
+        amount: 50,
+        description: description,
+        accountId: 'main',
+        categoryId: category,
+        date: DateTime(2026, 11, 10));
+    // Descriptions as the bank sends them, confirmed as spending.
+    for (final d in [
+      'Transferência enviada pelo Pix - Fulano Exemplo',
+      'Pagamento fatura de luz',
+      'Pagamento da fatura Operadora Exemplo',
+    ]) {
+      expect(FinanceRules.isNeutral(tx(d, 'bills'), null), isFalse, reason: d);
+    }
+    // The old entries without a category keep being recognised.
+    expect(
+        FinanceRules.isNeutral(tx('Transferência enviada', ''), null), isTrue);
+    expect(FinanceRules.isNeutral(tx('Pagamento de fatura', ''), null), isTrue);
+  });
+  test('an exchange rate or a quote keeps its extra decimal places', () {
+    // The form suggests the rate with four places; money input refused it.
+    expect(parseMoney('5,4321'), isNull);
+    expect(parseRate('5,4321'), 5.4321);
+    expect(parseRate('5.4321'), 5.4321);
+    expect(parseRate('5.432'), 5.432, reason: 'a rate has no thousands');
+    expect(parseRate('0,000123'), 0.000123);
+    expect(parseRate('1.234,5678'), 1234.5678);
+    for (final value in ['', '5,43210001', 'abc', '5,4,3', '1e3']) {
+      expect(parseRate(value), isNull);
     }
   });
   test('A purchase on the closing day is already in the next invoice', () {

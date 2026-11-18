@@ -2,7 +2,11 @@ import '../models/models.dart';
 import '../models/transaction_metadata.dart';
 
 class FinanceRules {
+  /// Entries older than the explicit mark, recognised by their text. Only
+  /// without a category: a real expense always has one, even when the bank
+  /// calls it "Transferência enviada - Fulano" or "Pagamento fatura de luz".
   static bool isImplicitNeutral(AppTransaction tx) {
+    if (tx.categoryId.isNotEmpty) return false;
     final text = '${tx.description} ${tx.note}'.toLowerCase();
     return text.contains('transfer out') ||
         text.contains('transfer in') ||
