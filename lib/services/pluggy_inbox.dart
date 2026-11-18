@@ -247,21 +247,7 @@ class PluggyInbox {
     final since = _now().subtract(window).millisecondsSinceEpoch;
     String? problem;
     try {
-      final decided = await db.query('notification_suggestions',
-          where:
-              "app_id = ? AND status IN ('confirmed', 'ignored') AND occurred_at >= ?",
-          whereArgs: [appId, since]);
-      for (var i = 0; i < decided.length; i += 500) {
-        await remote.decide([
-          for (final r in decided.skip(i).take(500))
-            {
-              'id': r['id'],
-              'review': r['status'],
-              if (r['transaction_id'] != null)
-                'transaction_id': r['transaction_id'],
-            }
-        ]);
-      }
+      await _push(db, since);
       final last = _lastRefresh;
       if (force || last == null || _now().difference(last) >= _refreshEvery) {
         try {
@@ -279,20 +265,79 @@ class PluggyInbox {
     return problem;
   }
 
+  /// Sends what was decided (or undone) here since the server last heard
+  /// from this device. What the server already knows is not repeated, so a
+  /// decision undone on another device is not put back by this one.
+  Future<void> _push(Database db, int since) async {
+    final rows = await db.query('notification_suggestions',
+        where: 'app_id = ? AND occurred_at >= ? AND ('
+            "(status IN ('confirmed', 'ignored') AND COALESCE(sent_status, '') != status) OR "
+            "(status = 'pending' AND sent_status IN ('confirmed', 'ignored')))",
+        whereArgs: [appId, since]);
+    for (var i = 0; i < rows.length; i += 500) {
+      final page = rows.skip(i).take(500).toList();
+      await remote.decide([
+        for (final r in page)
+          {
+            'id': r['id'],
+            'review': r['status'],
+            if (r['status'] == 'confirmed' && r['transaction_id'] != null)
+              'transaction_id': r['transaction_id'],
+            // The entry the app had made for it was undone.
+            if (r['status'] == 'pending' && r['sent_status'] == 'confirmed')
+              'reopen': true,
+          }
+      ]);
+      await db.transaction((txn) async {
+        for (final r in page) {
+          await txn.update(
+              'notification_suggestions', {'sent_status': r['status']},
+              where: 'id = ? AND status = ?',
+              whereArgs: [r['id'], r['status']]);
+        }
+      });
+    }
+  }
+
   Future<void> _apply(Database db, List<Map<String, dynamic>> rows) =>
       db.transaction((txn) async {
         for (final r in rows) {
           final id = r['id'], review = r['review'];
           if (id is! String || !isPluggy(id)) continue;
           if (review == 'pending') {
-            final values = {
+            final required = {
               'amount_cents': r['amount_cents'],
               'description': r['description'],
               'kind': r['kind'],
               'medium': r['medium'],
               'occurred_at': r['occurred_at'],
             };
-            if (values.values.any((v) => v == null)) continue;
+            if (required.values.any((v) => v == null)) continue;
+            // What the reconciliation needs from the bank (1.18 server;
+            // an older server leaves them empty and the rules still work).
+            String? text(String key) =>
+                r[key] is String && (r[key] as String).isNotEmpty
+                    ? r[key] as String
+                    : null;
+            final values = {
+              ...required,
+              'direction': switch (r['direction']) {
+                'in' || 'out' => r['direction'],
+                _ => null,
+              },
+              'bank_account_id': text('account_id'),
+              'nexo_account_id': text('nexo_account_id'),
+              'bank': text('bank'),
+              'operation_ref': text('operation_ref'),
+              'payment_ref': text('payment_ref'),
+              'same_owner': switch (r['same_owner']) {
+                true => 1,
+                false => 0,
+                _ => null,
+              },
+              'counterparty': text('counterparty'),
+              'manual': r['manual'] == true ? 1 : 0,
+            };
             final inserted = await txn.insert('notification_suggestions',
                 {'id': id, 'app_id': appId, ...values},
                 conflictAlgorithm: ConflictAlgorithm.ignore);
@@ -300,19 +345,37 @@ class PluggyInbox {
             if (inserted == 0) {
               await txn.update('notification_suggestions', values,
                   where: "id = ? AND status = 'pending'", whereArgs: [id]);
+              // Put back on another device, after the server had this
+              // device's decision: an ignore undone, or the entry the app
+              // had made for it undone (once that entry is gone here too).
+              await txn.rawUpdate(
+                  "UPDATE notification_suggestions SET status = 'pending', "
+                  "transaction_id = NULL, sent_status = 'pending', manual = 1 "
+                  'WHERE id = ? AND sent_status = status AND ('
+                  "status = 'ignored' OR (status = 'confirmed' AND NOT EXISTS "
+                  '(SELECT 1 FROM transactions t WHERE t.id = notification_suggestions.transaction_id)))',
+                  [id]);
             }
           } else if (review == 'confirmed' || review == 'ignored') {
             // Resolved on another device: leave this inbox.
-            await txn.update('notification_suggestions', {'status': review},
-                where: "id = ? AND status = 'pending'", whereArgs: [id]);
+            await txn.update('notification_suggestions',
+                {'status': review, 'sent_status': review},
+                where:
+                    "id = ? AND status = 'pending' AND COALESCE(sent_status, 'pending') = 'pending'",
+                whereArgs: [id]);
           }
         }
       });
 
-  /// Undo an ignore on this device and tell the server right away.
-  Future<void> undoIgnore(String id) async {
-    await remote.decide([
-      {'id': id, 'review': 'pending'}
-    ]);
+  /// An ignore was undone on this device, or the entry the app had made
+  /// for a movement was undone: tell the server right away (offline, the
+  /// next sync does). A server older than 1.18 keeps a confirmed one decided.
+  Future<void> pushNow() async {
+    try {
+      await _push(await DBHelper.database,
+          _now().subtract(window).millisecondsSinceEpoch);
+    } on PluggyUnavailable catch (e) {
+      Diagnostics.note('open finance', e);
+    }
   }
 }

@@ -21,6 +21,7 @@ const assistantKindLabels = <String, String>{
   'suggestion.confirm': 'Sugestão do banco confirmada',
   'suggestion.accept': 'Sugestão do banco confirmada',
   'suggestion.transfer': 'Sugestão do banco como transferência',
+  'suggestion.link': 'Sugestão do banco vinculada a um lançamento',
   'recurring.pay': 'Recorrente efetivada',
   'recurring.skip': 'Recorrente pulada',
   'recurring.add': 'Nova recorrente',

@@ -49,9 +49,14 @@ class _Remote implements PluggyRemote {
     for (final d in list) {
       decisions.add(d);
       final row = rows[d['id']];
-      if (row == null || row['review'] == 'confirmed') continue;
-      if (d['review'] == 'pending' && row['review'] != 'ignored') continue;
+      if (row == null || row['review'] == d['review']) continue;
+      // A link is final, unless the entry made for it was undone.
+      if (row['review'] == 'confirmed' &&
+          !(d['review'] == 'pending' && d['reopen'] == true)) {
+        continue;
+      }
       row['review'] = d['review'];
+      if (d['review'] == 'pending') row['manual'] = true;
     }
   }
 
@@ -174,11 +179,82 @@ void main() {
     await inbox.sync();
     expect(remote.rows['pluggy:i']!['review'], 'ignored');
     await NotificationInbox.undoIgnore('pluggy:i');
-    await inbox.undoIgnore('pluggy:i');
+    await inbox.pushNow();
     expect(remote.rows['pluggy:i']!['review'], 'pending');
     await inbox.sync(force: true);
     expect(await pendingIds(), ['pluggy:i'],
         reason: 'undo works within 35 days for Open Finance');
+    expect((await NotificationInbox.pending()).single['manual'], 1,
+        reason: 'what the person put back, no device decides again');
+  });
+
+  test('a decision is sent once; the server is not told again', () async {
+    remote.add('o', 900, now.subtract(const Duration(days: 2)));
+    await inbox.sync();
+    await NotificationInbox.ignore('pluggy:o');
+    await inbox.sync();
+    await inbox.sync(force: true);
+    await inbox.sync(force: true);
+    expect(remote.decisions, hasLength(1));
+  });
+
+  test('an ignore undone on another device comes back here, for the person',
+      () async {
+    remote.add('u', 900, now.subtract(const Duration(days: 2)));
+    await inbox.sync();
+    await NotificationInbox.ignore('pluggy:u');
+    await inbox.sync();
+    // The other device undid it.
+    remote.rows['pluggy:u']!
+      ..['review'] = 'pending'
+      ..['manual'] = true;
+    await inbox.sync(force: true);
+    final row = (await NotificationInbox.pending()).single;
+    expect(row['id'], 'pluggy:u');
+    expect(row['manual'], 1);
+    // And this device does not send its old ignore again.
+    await inbox.sync(force: true);
+    expect(remote.rows['pluggy:u']!['review'], 'pending');
+  });
+
+  test('an entry the app made, undone: the movement waits again everywhere',
+      () async {
+    await DBHelper.insertAccount(Account(
+        id: 'bank',
+        name: 'Banco fictício',
+        type: 'bank',
+        balance: 100,
+        currency: 'BRL',
+        colorValue: 0));
+    remote.add('z', 1500, now.subtract(const Duration(days: 2)));
+    await inbox.sync();
+    final app = AppProvider()..settings.budgetAlertsEnabled = false;
+    app.accounts = await DBHelper.getAccounts();
+    app.categories = await DBHelper.getCategories();
+    await app.addTransaction(
+        AppTransaction(
+            id: 'notification:pluggy:z',
+            type: 'income',
+            amount: 15,
+            description: 'Rendimentos',
+            accountId: 'bank',
+            categoryId: 'salary',
+            date: now.subtract(const Duration(days: 2)),
+            currency: 'BRL'),
+        suggestionId: 'pluggy:z');
+    await inbox.sync();
+    expect(remote.rows['pluggy:z']!['review'], 'confirmed');
+    // Undo: the entry goes away and the movement is reopened.
+    await app.deleteTransaction('notification:pluggy:z');
+    await (await DBHelper.database).update('notification_suggestions',
+        {'status': 'pending', 'transaction_id': null},
+        where: 'id = ?', whereArgs: ['pluggy:z']);
+    await inbox.pushNow();
+    expect(remote.rows['pluggy:z']!['review'], 'pending');
+    expect(remote.decisions.last['reopen'], isTrue);
+    await inbox.sync(force: true);
+    expect(await pendingIds(), ['pluggy:z']);
+    expect((await DBHelper.getAccounts()).single.balance, closeTo(100, 1e-9));
   });
 
   test('server problems are reported; stored suggestions still arrive',

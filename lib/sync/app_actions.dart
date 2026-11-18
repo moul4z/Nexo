@@ -22,6 +22,7 @@ const appWriteActions = <String, List<String>>{
   'transaction.split': ['split_transaction'],
   'transaction.split_bill': ['split_bill'],
   'lended.receive': ['settle_lended'],
+  'transaction.add_iof': ['link_suggestion'],
   'transfer.add': ['add_transfer', 'confirm_suggestion_as_transfer'],
   'metadata.save': ['update_transaction', 'update_transactions'],
   'metadata.delete': ['update_transaction'],

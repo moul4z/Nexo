@@ -1,0 +1,410 @@
+{
+  "about": "Casos da conciliação com o Open Finance, com nomes e valores fictícios. A regra do app (lib/services/reconciliation.dart) e a do conector (supabase/functions/nexo-mcp/reconcile.ts) precisam dar exatamente este resultado. Horas no fuso de Brasília.",
+  "now": "2026-11-20T12:00:00",
+  "owner": ["Ana Teste"],
+  "creditAccounts": ["card"],
+  "cases": [
+    {
+      "name": "A1 Pix entre dois bancos ligados à mesma conta do Nexo: interno, sai sozinho",
+      "movements": [
+        {"id": "o", "cents": 2000, "direction": "out", "description": "Pix enviado - Ana Teste", "counterparty": "Ana Teste", "at": "2026-11-17T10:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "i", "cents": 2000, "direction": "in", "description": "Pix recebido - Ana Teste", "counterparty": "Ana Teste", "at": "2026-11-17T10:01:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "o": {"resolution": "internal", "automatic": true, "pairId": "i"},
+        "i": {"resolution": "internal", "automatic": true, "pairId": "o"}
+      }
+    },
+    {
+      "name": "A2 dois pares de mesmo valor no mesmo dia: cada saída com a entrada mais próxima",
+      "movements": [
+        {"id": "o1", "cents": 2000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T09:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "i2", "cents": 2000, "direction": "in", "description": "Pix recebido - Ana Teste", "at": "2026-11-17T15:02:00", "accountId": "inter", "nexoAccountId": "main"},
+        {"id": "o2", "cents": 2000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T15:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "i1", "cents": 2000, "direction": "in", "description": "Pix recebido - Ana Teste", "at": "2026-11-17T09:01:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "o1": {"resolution": "internal", "automatic": true, "pairId": "i1"},
+        "i1": {"resolution": "internal", "automatic": true, "pairId": "o1"},
+        "o2": {"resolution": "internal", "automatic": true, "pairId": "i2"},
+        "i2": {"resolution": "internal", "automatic": true, "pairId": "o2"}
+      }
+    },
+    {
+      "name": "A3 sem nome, entre duas contas do mesmo banco na mesma conta do Nexo: interno",
+      "movements": [
+        {"id": "o", "cents": 15000, "direction": "out", "kind": "transfer", "description": "Transferência enviada", "at": "2026-11-16T11:00:00", "accountId": "btg-a", "nexoAccountId": "main"},
+        {"id": "i", "cents": 15000, "direction": "in", "kind": "transfer", "description": "Transferência recebida", "at": "2026-11-16T11:00:00", "accountId": "btg-b", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "o": {"resolution": "internal", "automatic": true, "pairId": "i"},
+        "i": {"resolution": "internal", "automatic": true, "pairId": "o"}
+      }
+    },
+    {
+      "name": "A4 mesma conta do banco, sem nome: não é par, são duas movimentações",
+      "movements": [
+        {"id": "o", "cents": 5000, "direction": "out", "description": "Pagamento", "at": "2026-11-16T10:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "i", "cents": 5000, "direction": "in", "description": "Recebimento", "at": "2026-11-16T16:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "o": {"resolution": "newEntry", "automatic": false},
+        "i": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "A5 aposta digitada à mão liga ao Pix para a plataforma",
+      "movements": [
+        {"id": "m", "cents": 3000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS", "counterparty": "VOREX PAGAMENTOS", "at": "2026-11-17T21:10:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-bet", "type": "expense", "cents": 3000, "description": "Aposta", "accountId": "main", "day": "2026-11-17", "categoryId": "bets"}
+      ],
+      "expect": {
+        "m": {"resolution": "linked", "automatic": true, "transactionId": "e-bet"}
+      }
+    },
+    {
+      "name": "B1 contas diferentes do Nexo, com o nome nos dois lados: vira transferência",
+      "movements": [
+        {"id": "o", "cents": 10000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T08:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "i", "cents": 10000, "direction": "in", "description": "Pix recebido - Ana Teste", "at": "2026-11-17T08:00:30", "accountId": "mp-reserva", "nexoAccountId": "reserve"}
+      ],
+      "expect": {
+        "o": {"resolution": "ownTransfer", "automatic": true, "pairId": "i", "fromAccountId": "main", "toAccountId": "reserve"},
+        "i": {"resolution": "ownTransfer", "automatic": true, "pairId": "o", "fromAccountId": "main", "toAccountId": "reserve"}
+      }
+    },
+    {
+      "name": "B2 só um lado, com o nome, há três dias: a pessoa diz para onde foi",
+      "movements": [
+        {"id": "o", "cents": 50000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T09:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {"o": {"resolution": "ownName", "automatic": false}}
+    },
+    {
+      "name": "B3 só um lado, ontem à noite: o outro banco ainda pode mandar o outro lado",
+      "movements": [
+        {"id": "o", "cents": 50000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-19T20:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {"o": {"resolution": "ownName", "automatic": false, "waiting": true}}
+    },
+    {
+      "name": "B4 mesmo titular pelo documento, sem o nome escrito",
+      "movements": [
+        {"id": "o", "cents": 7000, "direction": "out", "description": "Pix enviado - A T", "sameOwner": true, "at": "2026-11-17T09:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {"o": {"resolution": "ownName", "automatic": false}}
+    },
+    {
+      "name": "B5 transferência já lançada à mão: os dois lados ligam às pernas, nada em dobro",
+      "movements": [
+        {"id": "o", "cents": 20000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T08:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "i", "cents": 20000, "direction": "in", "description": "Pix recebido - Ana Teste", "at": "2026-11-17T08:00:30", "accountId": "mp-reserva", "nexoAccountId": "reserve"}
+      ],
+      "entries": [
+        {"id": "t-out", "type": "expense", "cents": 20000, "description": "Transferência enviada", "accountId": "main", "day": "2026-11-17", "source": "transfer:t-out"},
+        {"id": "t-in", "type": "income", "cents": 20000, "description": "Transferência recebida", "accountId": "reserve", "day": "2026-11-17", "source": "transfer:t-out"}
+      ],
+      "expect": {
+        "o": {"resolution": "linked", "automatic": true, "transactionId": "t-out"},
+        "i": {"resolution": "linked", "automatic": true, "transactionId": "t-in"}
+      }
+    },
+    {
+      "name": "C1 fatura paga, com o pagamento já no Nexo: banco e cartão ligam às duas pernas",
+      "movements": [
+        {"id": "b", "cents": 35000, "direction": "out", "description": "Pagamento com Pix - NU PAGAMENTOS", "counterparty": "NU PAGAMENTOS", "at": "2026-11-16T10:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "c", "cents": 35000, "direction": "in", "kind": "transfer", "medium": "credit", "description": "Pagamento recebido", "at": "2026-11-16T10:05:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "entries": [
+        {"id": "p-out", "type": "expense", "cents": 35000, "description": "Transferência enviada", "accountId": "main", "day": "2026-11-16", "source": "transfer:p-out"},
+        {"id": "p-in", "type": "income", "cents": 35000, "description": "Transferência recebida", "accountId": "card", "day": "2026-11-16", "source": "transfer:p-out"}
+      ],
+      "expect": {
+        "b": {"resolution": "linked", "automatic": true, "transactionId": "p-out", "pairId": "c"},
+        "c": {"resolution": "linked", "automatic": true, "transactionId": "p-in", "pairId": "b"}
+      }
+    },
+    {
+      "name": "C2 fatura paga, sem pagamento no Nexo: um toque registra, nunca como gasto",
+      "movements": [
+        {"id": "b", "cents": 35000, "direction": "out", "description": "Pagamento com Pix - NU PAGAMENTOS", "counterparty": "NU PAGAMENTOS", "at": "2026-11-16T10:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "c", "cents": 35000, "direction": "in", "kind": "transfer", "medium": "credit", "description": "Pagamento recebido", "at": "2026-11-16T10:05:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "expect": {
+        "b": {"resolution": "invoicePayment", "automatic": false, "pairId": "c", "fromAccountId": "main", "toAccountId": "card"},
+        "c": {"resolution": "invoicePayment", "automatic": false, "pairId": "b", "fromAccountId": "main", "toAccountId": "card"}
+      }
+    },
+    {
+      "name": "C3 um delivery de mesmo valor não é o pagamento da fatura",
+      "movements": [
+        {"id": "b", "cents": 4290, "direction": "out", "description": "Pagamento com Pix - NU PAGAMENTOS", "counterparty": "NU PAGAMENTOS", "at": "2026-11-16T10:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-food", "type": "expense", "cents": 4290, "description": "iFood", "accountId": "main", "day": "2026-11-16", "categoryId": "food"}
+      ],
+      "expect": {
+        "b": {"resolution": "invoicePayment", "automatic": false, "fromAccountId": "main", "toAccountId": "card"}
+      }
+    },
+    {
+      "name": "D1 pagamento e devolução com o mesmo id de operação, oito dias depois",
+      "movements": [
+        {"id": "p", "cents": 8000, "direction": "out", "description": "Compra Loja Exemplo", "operationRef": "OP-1", "at": "2026-11-10T14:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "r", "cents": 8000, "direction": "in", "kind": "refund", "description": "Dinheiro devolvido", "operationRef": "OP-1", "at": "2026-11-18T09:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "p": {"resolution": "reversal", "automatic": true, "pairId": "r"},
+        "r": {"resolution": "reversal", "automatic": true, "pairId": "p"}
+      }
+    },
+    {
+      "name": "D2 'Reembolso' sem nome, no dia seguinte, sem outra saída igual: estorno",
+      "movements": [
+        {"id": "p", "cents": 2500, "direction": "out", "description": "Pix enviado - VOLNA TECH", "counterparty": "VOLNA TECH", "at": "2026-11-15T22:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "r", "cents": 2500, "direction": "in", "kind": "refund", "description": "Reembolso", "at": "2026-11-16T08:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "p": {"resolution": "reversal", "automatic": true, "pairId": "r"},
+        "r": {"resolution": "reversal", "automatic": true, "pairId": "p"}
+      }
+    },
+    {
+      "name": "D3 pagar a um e receber de outro o mesmo valor não é estorno",
+      "movements": [
+        {"id": "p", "cents": 4000, "direction": "out", "description": "Pix enviado - Joao Exemplo", "counterparty": "Joao Exemplo", "at": "2026-11-16T10:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "r", "cents": 4000, "direction": "in", "description": "Pix recebido - Maria Modelo", "counterparty": "Maria Modelo", "at": "2026-11-16T15:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "p": {"resolution": "newEntry", "automatic": false},
+        "r": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "E1 rendimento do banco",
+      "movements": [
+        {"id": "y", "cents": 31, "direction": "in", "description": "Rendimentos", "at": "2026-11-18T03:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "expect": {"y": {"resolution": "yield", "automatic": true}}
+    },
+    {
+      "name": "E2 rendimento guardado antes da 1.18, como transferência sem direção",
+      "movements": [
+        {"id": "y", "cents": 12, "kind": "transfer", "description": "Rendimento da conta", "at": "2026-11-18T03:00:00"}
+      ],
+      "expect": {"y": {"resolution": "yield", "automatic": true}}
+    },
+    {
+      "name": "E3 rendimento já lançado à mão: liga, nunca lança de novo",
+      "movements": [
+        {"id": "y", "cents": 31, "direction": "in", "description": "Rendimentos", "at": "2026-11-18T03:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-y", "type": "income", "cents": 31, "description": "Rendimento do dia", "accountId": "main", "day": "2026-11-18", "categoryId": "yield"}
+      ],
+      "expect": {"y": {"resolution": "linked", "automatic": true, "transactionId": "e-y"}}
+    },
+    {
+      "name": "E4 salário descrito como remuneração não é rendimento",
+      "movements": [
+        {"id": "s", "cents": 120000, "direction": "in", "description": "REMUNERACAO/SALARIO EMPRESA EXEMPLO", "at": "2026-11-17T08:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {"s": {"resolution": "newEntry", "automatic": false}}
+    },
+    {
+      "name": "E5 rendimento grande é perguntado, não lançado sozinho",
+      "movements": [
+        {"id": "y", "cents": 25000, "direction": "in", "description": "Rendimento da aplicação", "at": "2026-11-17T08:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {"y": {"resolution": "yield", "automatic": false}}
+    },
+    {
+      "name": "D4 'Devolução recebida' sem nome, no dia seguinte: estorno",
+      "movements": [
+        {"id": "p", "cents": 1890, "direction": "out", "description": "Compra Loja Exemplo", "at": "2026-11-15T12:00:00", "accountId": "mp", "nexoAccountId": "main"},
+        {"id": "r", "cents": 1890, "direction": "in", "description": "Devolução recebida", "at": "2026-11-16T09:00:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "expect": {
+        "p": {"resolution": "reversal", "automatic": true, "pairId": "r"},
+        "r": {"resolution": "reversal", "automatic": true, "pairId": "p"}
+      }
+    },
+    {
+      "name": "K1 o nome do titular dentro do nome de outra pessoa não conta",
+      "movements": [
+        {"id": "m", "cents": 3000, "direction": "out", "description": "Pix enviado - Mariana Testerman", "counterparty": "Mariana Testerman", "at": "2026-11-17T10:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "expect": {"m": {"resolution": "newEntry", "automatic": false}}
+    },
+    {
+      "name": "F1 compra internacional e IOF do dia seguinte; o lançamento já tem a soma",
+      "movements": [
+        {"id": "buy", "cents": 11000, "direction": "out", "medium": "credit", "description": "Servico Exemplo AI", "at": "2026-11-14T16:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "iof", "cents": 385, "direction": "out", "medium": "credit", "description": "IOF de compra internacional", "at": "2026-11-15T06:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 11385, "description": "Assinatura de IA", "accountId": "card", "day": "2026-11-14", "categoryId": "subs"}
+      ],
+      "expect": {
+        "buy": {"resolution": "linked", "automatic": true, "transactionId": "e1", "withIof": "iof"},
+        "iof": {"resolution": "linked", "automatic": true, "transactionId": "e1", "pairId": "buy"}
+      }
+    },
+    {
+      "name": "F2 a compra foi ligada ontem ao lançamento sem IOF: o IOF entra nele",
+      "movements": [
+        {"id": "iof", "cents": 385, "direction": "out", "medium": "credit", "description": "IOF de compra internacional", "at": "2026-11-15T06:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "buy", "cents": 11000, "direction": "out", "medium": "credit", "description": "Servico Exemplo AI", "at": "2026-11-14T16:00:00", "accountId": "nu-card", "nexoAccountId": "card"}}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 11000, "description": "Assinatura de IA", "accountId": "card", "day": "2026-11-14", "categoryId": "subs"}
+      ],
+      "expect": {
+        "iof": {"resolution": "iof", "automatic": true, "transactionId": "e1", "pairId": "buy"}
+      }
+    },
+    {
+      "name": "F3 a compra foi ligada ontem a um lançamento que já tinha o IOF: só liga",
+      "movements": [
+        {"id": "iof", "cents": 385, "direction": "out", "medium": "credit", "description": "IOF de compra internacional", "at": "2026-11-15T06:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "buy", "cents": 11000, "direction": "out", "medium": "credit", "description": "Servico Exemplo AI", "at": "2026-11-14T16:00:00", "accountId": "nu-card", "nexoAccountId": "card"}}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 11385, "description": "Assinatura de IA", "accountId": "card", "day": "2026-11-14", "categoryId": "subs"}
+      ],
+      "expect": {
+        "iof": {"resolution": "linked", "automatic": true, "transactionId": "e1", "pairId": "buy"}
+      }
+    },
+    {
+      "name": "F4 compra e IOF sem lançamento: revisados juntos, como uma compra só",
+      "movements": [
+        {"id": "buy", "cents": 11000, "direction": "out", "medium": "credit", "description": "Servico Exemplo AI", "at": "2026-11-14T16:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "iof", "cents": 385, "direction": "out", "medium": "credit", "description": "IOF de compra internacional", "at": "2026-11-15T06:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "expect": {
+        "buy": {"resolution": "newEntry", "automatic": false},
+        "iof": {"resolution": "iof", "automatic": false, "pairId": "buy"}
+      }
+    },
+    {
+      "name": "G1 regra de despesa marcada 'lançar sozinho'",
+      "movements": [
+        {"id": "m", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS LTDA", "counterparty": "VOREX PAGAMENTOS LTDA", "at": "2026-11-17T21:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "rules": [{"id": "r-bet", "pattern": "vorex", "type": "expense", "categoryId": "bets", "auto": true}],
+      "expect": {"m": {"resolution": "rule", "automatic": true, "ruleId": "r-bet", "categoryId": "bets"}}
+    },
+    {
+      "name": "G2 regra de receita marcada 'lançar sozinho'",
+      "movements": [
+        {"id": "m", "cents": 4500, "direction": "in", "description": "Pix recebido - PHSS INSTITUICAO", "counterparty": "PHSS INSTITUICAO", "at": "2026-11-17T23:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "rules": [{"id": "r-win", "pattern": "phss", "type": "income", "categoryId": "wins", "auto": true}],
+      "expect": {"m": {"resolution": "rule", "automatic": true, "ruleId": "r-win", "categoryId": "wins"}}
+    },
+    {
+      "name": "G3 a regra nunca lança por cima de um lançamento igual: liga",
+      "movements": [
+        {"id": "m", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS LTDA", "at": "2026-11-17T21:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-bet", "type": "expense", "cents": 2000, "description": "Aposta", "accountId": "main", "day": "2026-11-17", "categoryId": "bets"}
+      ],
+      "rules": [{"id": "r-bet", "pattern": "vorex", "type": "expense", "categoryId": "bets", "auto": true}],
+      "expect": {"m": {"resolution": "linked", "automatic": true, "transactionId": "e-bet"}}
+    },
+    {
+      "name": "G4 regra só de categoria (sem 'lançar sozinho') não lança nada",
+      "movements": [
+        {"id": "m", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS LTDA", "at": "2026-11-17T21:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "rules": [{"id": "r-bet", "pattern": "vorex", "type": "expense", "categoryId": "bets", "auto": false}],
+      "expect": {"m": {"resolution": "newEntry", "automatic": false}}
+    },
+    {
+      "name": "G5 regra, mas o banco não está ligado a uma conta do Nexo: a pessoa escolhe a conta",
+      "movements": [
+        {"id": "m", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS LTDA", "at": "2026-11-17T21:00:00", "accountId": "outro"}
+      ],
+      "rules": [{"id": "r-bet", "pattern": "vorex", "type": "expense", "categoryId": "bets", "auto": true}],
+      "expect": {"m": {"resolution": "rule", "automatic": false, "ruleId": "r-bet", "categoryId": "bets"}}
+    },
+    {
+      "name": "G6 Pix para a corretora (no próprio nome), com regra de transferência, passados dois dias",
+      "movements": [
+        {"id": "m", "cents": 30000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T09:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "rules": [{"id": "r-broker", "pattern": "ana teste", "type": "transfer", "categoryId": "", "auto": true, "targetAccountId": "broker"}],
+      "expect": {"m": {"resolution": "rule", "automatic": true, "ruleId": "r-broker", "fromAccountId": "main", "toAccountId": "broker"}}
+    },
+    {
+      "name": "G7 o mesmo Pix, ontem: a regra espera o outro banco antes de lançar",
+      "movements": [
+        {"id": "m", "cents": 30000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-19T20:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "rules": [{"id": "r-broker", "pattern": "ana teste", "type": "transfer", "categoryId": "", "auto": true, "targetAccountId": "broker"}],
+      "expect": {"m": {"resolution": "rule", "automatic": false, "waiting": true, "ruleId": "r-broker", "fromAccountId": "main", "toAccountId": "broker"}}
+    },
+    {
+      "name": "H1 lançamento igual em outra conta do mesmo tipo não é o mesmo",
+      "movements": [
+        {"id": "m", "cents": 1500, "direction": "out", "description": "Padaria Exemplo", "at": "2026-11-17T07:30:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e", "type": "expense", "cents": 1500, "description": "Padaria Exemplo", "accountId": "other", "day": "2026-11-17", "categoryId": "food"}
+      ],
+      "expect": {"m": {"resolution": "newEntry", "automatic": false}}
+    },
+    {
+      "name": "H2 o banco viu Pix; no Nexo está no cartão: na dúvida, nunca sozinho",
+      "movements": [
+        {"id": "m", "cents": 2530, "direction": "out", "description": "iFood", "at": "2026-11-17T12:30:00", "accountId": "mp", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e", "type": "expense", "cents": 2530, "description": "iFood", "accountId": "card", "day": "2026-11-17", "categoryId": "food"}
+      ],
+      "expect": {"m": {"resolution": "maybe", "automatic": false, "transactionId": "e", "wrongAccount": true}}
+    },
+    {
+      "name": "I1 um lançamento não serve a duas movimentações iguais",
+      "movements": [
+        {"id": "m1", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS", "at": "2026-11-17T10:00:00", "accountId": "inter", "nexoAccountId": "main"},
+        {"id": "m2", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS", "at": "2026-11-17T18:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-bet", "type": "expense", "cents": 2000, "description": "Aposta", "accountId": "main", "day": "2026-11-17", "categoryId": "bets"}
+      ],
+      "expect": {
+        "m1": {"resolution": "maybe", "automatic": false, "transactionId": "e-bet"},
+        "m2": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "J1 Pix no próprio nome nunca é ligado a uma despesa",
+      "movements": [
+        {"id": "m", "cents": 2000, "direction": "out", "description": "Pix enviado - Ana Teste", "at": "2026-11-17T10:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-bet", "type": "expense", "cents": 2000, "description": "Aposta", "accountId": "main", "day": "2026-11-17", "categoryId": "bets"}
+      ],
+      "expect": {"m": {"resolution": "ownName", "automatic": false}}
+    },
+    {
+      "name": "J2 Pix para a plataforma três dias depois do lançamento: na dúvida",
+      "movements": [
+        {"id": "m", "cents": 2000, "direction": "out", "description": "Pix enviado - VOREX PAGAMENTOS", "at": "2026-11-18T10:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "entries": [
+        {"id": "e-bet", "type": "expense", "cents": 2000, "description": "Aposta", "accountId": "main", "day": "2026-11-15", "categoryId": "bets"}
+      ],
+      "expect": {"m": {"resolution": "maybe", "automatic": false, "transactionId": "e-bet"}}
+    }
+  ]
+}

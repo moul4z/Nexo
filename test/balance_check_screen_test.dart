@@ -108,11 +108,18 @@ void main() {
           balanceCents: -3300,
           bankUpdatedAt: DateTime.now().subtract(const Duration(hours: 1)))
     ]);
-    Future<void> settle() async {
-      for (var i = 0; i < 12; i++) {
+    // SQLite FFI work runs outside the fake clock: wait for the outcome
+    // (bounded) instead of a fixed time, so a busy machine does not fail it.
+    Future<void> settle([String? until]) async {
+      for (var i = 0; i < (until == null ? 12 : 200); i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 30)));
         await tester.pump();
+        if (until != null &&
+            i >= 5 &&
+            find.textContaining(until).evaluate().isNotEmpty) {
+          break;
+        }
       }
     }
 
@@ -123,7 +130,7 @@ void main() {
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
             home: BalanceCheckScreen(remote: remote))));
-    await settle();
+    await settle('Mercado Pago');
     expect(tester.takeException(), isNull);
     expect(find.textContaining('Mercado Pago'), findsOneWidget);
     expect(find.text('Ajustar o Nexo (neutro)'), findsNothing);
@@ -131,7 +138,7 @@ void main() {
     await tester.tap(find.byType(DropdownButtonFormField<String?>));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Conta principal').last);
-    await settle();
+    await settle('Diferença');
     expect(remote.links['p-mp'], 'mp');
     expect(find.textContaining('Diferença'), findsOneWidget);
 
@@ -179,11 +186,18 @@ void main() {
       bank('p-in', 'Inter', 5000),
       bank('p-btg', 'BTG', -1000),
     ]);
-    Future<void> settle() async {
-      for (var i = 0; i < 12; i++) {
+    // SQLite FFI work runs outside the fake clock: wait for the outcome
+    // (bounded) instead of a fixed time, so a busy machine does not fail it.
+    Future<void> settle([String? until]) async {
+      for (var i = 0; i < (until == null ? 12 : 200); i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 30)));
         await tester.pump();
+        if (until != null &&
+            i >= 5 &&
+            find.textContaining(until).evaluate().isNotEmpty) {
+          break;
+        }
       }
     }
 
@@ -194,7 +208,7 @@ void main() {
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
             home: BalanceCheckScreen(remote: remote))));
-    await settle();
+    await settle('soma de 3 contas');
     expect(tester.takeException(), isNull);
     expect(find.text('Conta principal · soma de 3 contas'), findsOneWidget);
     expect(find.textContaining('Somada com mais 2 contas'), findsNWidgets(3));
@@ -203,7 +217,7 @@ void main() {
     await tester.tap(find.text('Ajustar o Nexo (neutro)'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Ajustar'));
-    await settle();
+    await settle('Bate com o banco');
     final mp = (await tester.runAsync(DBHelper.getAccounts))!
         .firstWhere((a) => a.id == 'mp');
     expect(mp.balance, closeTo(140, 1e-9));

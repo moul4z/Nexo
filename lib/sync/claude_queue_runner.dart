@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/app_provider.dart';
 import '../services/desktop_profile.dart';
 import '../services/diagnostics.dart';
 import '../services/inbox_reconciler.dart';
+import '../services/inbox_writer.dart';
 import '../services/notification_inbox.dart';
 import '../services/platform_capabilities.dart';
 import '../services/pluggy_inbox.dart';
@@ -22,8 +24,9 @@ import 'sync_controller.dart';
 String? _passSource;
 
 /// Connects the assistant to sync: after every successful round this
-/// device claims and applies the pending requests, then records the check.
-/// [background] skips the bank inbox, which only matters with the app open.
+/// device claims and applies the pending requests, then records the check,
+/// and the bank inbox settles what needs nobody. [background]: the headless
+/// pass, which reads the banks itself (the app does it on opening).
 AssistantCommands wireAssistant(AppProvider provider, SyncConfig config,
     {bool background = false}) {
   final assistant = AssistantCommands.instance = AssistantCommands(
@@ -50,17 +53,42 @@ AssistantCommands wireAssistant(AppProvider provider, SyncConfig config,
           applied: assistant.handled - before,
           ok: ok));
     }
-    if (background) return;
+    await bankPass(provider, headless: background);
+  };
+  return assistant;
+}
+
+/// The bank part of a round: what the banks sent is settled by the app when
+/// it needs nobody (already registered, between the person's accounts,
+/// yields, rules), the decisions go to the server, so the assistant sees a
+/// clean queue too. With the app closed the banks are read at most once an
+/// hour. A failure waits for the next round: nothing here blocks the queue.
+Future<void> bankPass(AppProvider provider, {required bool headless}) async {
+  try {
+    final pluggy = PluggyInbox.instance;
+    if (headless) {
+      if (pluggy == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - (prefs.getInt(_bankPassKey) ?? 0) < 3600000) return;
+      await prefs.setInt(_bankPassKey, now);
+      await pluggy.sync();
+    }
     await InboxReconciler.background(
         pending: NotificationInbox.pending,
         transactions: provider.transactions,
         metadata: provider.transactionMetadata,
         accounts: provider.accounts,
         profileName: provider.settings.userName,
-        push: () async => PluggyInbox.instance?.sync());
-  };
-  return assistant;
+        writer: AppInboxWriter(provider),
+        push: () async => pluggy?.pushNow(),
+        every: headless ? Duration.zero : const Duration(minutes: 10));
+  } catch (e) {
+    Diagnostics.note('bank pass', e);
+  }
 }
+
+const _bankPassKey = 'nexo_bank_pass_at_v1';
 
 /// The app's own engine answers the worker (app alive but not in front).
 Future<QueueCheck> runQueueInApp(String source) async {
@@ -100,6 +128,11 @@ Future<QueueCheck> runHeadlessQueue(String source) async {
     return QueueCheck(at: DateTime.now(), source: source, note: 'desligado');
   }
   SupabaseAuth.app = SupabaseAuth(config);
+  // Real bank data never reaches a test profile.
+  if (!DesktopProfile.isTest) {
+    PluggyInbox.instance =
+        PluggyInbox(SupabasePluggyRemote(config, SupabaseAuth.app!));
+  }
   final provider = AppProvider();
   await provider.load();
   final sync = SyncController.instance = SyncController.forApp(

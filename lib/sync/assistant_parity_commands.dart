@@ -35,7 +35,7 @@ class AssistantParityCommands {
     'investment.link', 'loan.add', 'loan.edit', 'loan.delete', 'loan.unpay',
     'lended.edit', 'lended.delete', 'person.edit', 'person.delete',
     'rule.save', 'rule.delete', 'suggestion.transfer', 'suggestion.accept',
-    'bank.refresh',
+    'suggestion.link', 'bank.refresh',
   ];
 
   static double _reais(Object? cents) => (cents as num).toInt() / 100;
@@ -617,6 +617,7 @@ class AssistantParityCommands {
         return {'rule_id': a['id'], 'message': 'Regra excluída.'};
       case 'suggestion.transfer':
       case 'suggestion.accept':
+      case 'suggestion.link':
         return _suggestion(kind, a);
       case 'bank.refresh':
         final inbox = PluggyInbox.instance;
@@ -691,6 +692,25 @@ class AssistantParityCommands {
     }
     final amount = (s['amount_cents'] as int) / 100;
     final date = DateTime.fromMillisecondsSinceEpoch(s['occurred_at'] as int);
+    if (kind == 'suggestion.link') {
+      // The same movement as an entry that already exists: nothing new.
+      final entry = app.transactions
+              .where((t) => t.id == a['transaction_id'])
+              .firstOrNull ??
+          (throw StateError('O lançamento não existe mais no Nexo.'));
+      if (a['add_amount'] == true) {
+        await app.addIofToTransaction(entry.id, sid, amount);
+        return {
+          'transaction_id': entry.id,
+          'message': 'Valor somado ao lançamento; sugestão vinculada.'
+        };
+      }
+      await DBHelper.confirmSuggestion(await DBHelper.database, sid, entry.id);
+      return {
+        'transaction_id': entry.id,
+        'message': 'Sugestão vinculada. Nada foi lançado de novo.'
+      };
+    }
     if (kind == 'suggestion.transfer') {
       final from = _account(a['from_account_id']);
       final to = _account(a['to_account_id']);

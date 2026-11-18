@@ -3,7 +3,7 @@
 // network, no Supabase project.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { analyze, monthFilter, previousMonth } from '../supabase/functions/nexo-mcp/finance.ts';
+import { analyze, isImplicitNeutral, monthFilter, previousMonth } from '../supabase/functions/nexo-mcp/finance.ts';
 import { callTool, ToolInputError, tools } from '../supabase/functions/nexo-mcp/tools.ts';
 import { createHandler } from '../supabase/functions/nexo-mcp/mcp.ts';
 
@@ -25,6 +25,48 @@ for (const c of fixture.cases) {
     }
     assert.deepEqual(a.categories, c.expected.categories);
   });
+}
+
+await test('a real expense is never neutral because of what the bank calls it', () => {
+  for (const description of ['Transferência enviada pelo Pix - Fulano Exemplo', 'Pagamento fatura de luz', 'Pagamento da fatura Operadora Exemplo']) {
+    assert.equal(isImplicitNeutral({ description, note: '', category_id: 'bills' }), false, description);
+  }
+  assert.equal(isImplicitNeutral({ description: 'Transferência enviada', note: '', category_id: '' }), true);
+  assert.equal(isImplicitNeutral({ description: 'Pagamento de fatura', note: '' }), true);
+});
+
+// The same cases as test/reconcile_cases_test.dart: the connector and the
+// app must settle every bank movement the same way.
+{
+  const { reconcile } = await import('../supabase/functions/nexo-mcp/reconcile.ts');
+  const cases = JSON.parse(await readFile(new URL('../test/fixtures/reconcile_cases.json', import.meta.url), 'utf8'));
+  const at = (local) => Date.parse(`${local}-03:00`);
+  const movement = (m) => ({
+    id: m.id, amountCents: m.cents, description: m.description,
+    kind: m.kind ?? (m.direction === 'in' ? 'income' : 'expense'), medium: m.medium ?? 'bank',
+    occurredAt: at(m.at), direction: m.direction ?? null, accountId: m.accountId ?? null,
+    nexoAccountId: m.nexoAccountId ?? null, operationRef: m.operationRef ?? null,
+    paymentRef: m.paymentRef ?? null, sameOwner: m.sameOwner ?? null, counterparty: m.counterparty ?? null,
+  });
+  for (const c of cases.cases) {
+    await test(`reconcile like the app: ${c.name}`, () => {
+      const result = reconcile(c.movements.map(movement),
+        (c.entries ?? []).map((e) => ({ ...e, source: e.source ?? 'manual', categoryId: e.categoryId ?? '' })), {
+          ownerNames: cases.owner,
+          creditAccounts: new Set(cases.creditAccounts),
+          settled: (c.settled ?? []).map((s) => ({ movement: movement(s.movement), transactionId: s.transactionId })),
+          rules: (c.rules ?? []).map((r) => ({ categoryId: '', targetAccountId: null, ...r })),
+          now: at(cases.now),
+        });
+      const got = Object.fromEntries(result.map((m) => {
+        const { id, score: _score, ...rest } = m;
+        // Same shape as the Dart test: only what is set.
+        return [id, Object.fromEntries(Object.entries(rest).filter(([k, v]) =>
+          k === 'resolution' || k === 'automatic' || (v !== undefined && v !== null && v !== false))),];
+      }));
+      assert.deepEqual(got, c.expect);
+    });
+  }
 }
 
 await test('month helpers reproduce the app periods', () => {
@@ -326,6 +368,7 @@ await test('suggestions: listed in reais, confirmed as request, ignored directly
   const list = await act(q, 'list_suggestions', { limit: 5 });
   assert.equal(list.suggestions[0].amount, 32.9);
   assert.equal(list.suggestions[0].medium, 'cartão');
+  assert.equal(list.suggestions[0].status, 'Nova');
   await act(q, 'confirm_suggestion', { id: 'pluggy:a', account_id: 'card', category_id: 'food_exp' });
   assert.deepEqual(q.items[0], { id: q.items[0].id, kind: 'suggestion.confirm', status: 'pending',
     args: { id: 'pluggy:a', account_id: 'card', category_id: 'food_exp', type: 'expense', description: undefined } });
@@ -791,6 +834,7 @@ const scenario = {
   devices: [{ app_version: '1.13.0+52', kinds: ['category.envelope'], settings: { themeMode: 'dark' }, seen_at: '2026-10-29T10:00:00Z' }],
 };
 const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.deps);
+const cents2 = (v) => Math.round(v * 100) / 100;
 
 await test('parity: spending types read like the Orçamento screen', async () => {
   const q = smartQueue();
@@ -1083,20 +1127,48 @@ await test('split bill: parts by name, and money received into an account', asyn
   await assert.rejects(pact(q, 'settle_lended', { id: 'p1', account_id: 'nu' }, l), /cartão/);
 });
 
-await test('suggestions point at what is probably recorded, and at the wrong account', async () => {
+await test('suggestions come classified with the rule of the app, never by amount alone', async () => {
   const q = smartQueue();
-  const at = (d) => Date.parse(`${d}T12:00:00Z`);
+  const at = (d) => Date.parse(`${d}T15:00:00Z`);
+  const row = (id, date, cents, description, extra = {}) => ({ id: `pluggy:${id}`, bank: 'B', occurred_at: at(date), amount_cents: cents,
+    kind: 'expense', medium: 'bank', description, direction: 'out', account_id: 'acc-1', nexo_account_id: 'main', settled: true, ...extra });
+  q.deps.now = () => at('2026-10-29');
   q.deps.suggestions = async () => [
-    { id: 'pluggy:a', bank: 'B', occurred_at: at('2026-10-20'), amount_cents: 4590, kind: 'expense', medium: 'credit', description: 'iFood' },
-    { id: 'pluggy:b', bank: 'B', occurred_at: at('2026-10-21'), amount_cents: 3990, kind: 'expense', medium: 'bank', description: 'iFood Pix' },
-    { id: 'pluggy:c', bank: 'B', occurred_at: at('2026-10-21'), amount_cents: 777, kind: 'expense', medium: 'bank', description: 'Novo' },
-    { id: 'pluggy:d', bank: 'B', occurred_at: at('2026-10-20'), amount_cents: 4590, kind: 'expense', medium: 'credit', description: 'iFood de novo' },
+    row('a', '2026-10-20', 4590, 'IFD*IFOOD', { medium: 'credit', account_id: 'acc-3', nexo_account_id: 'nu' }),
+    row('c', '2026-10-21', 777, 'Loja Nova'),
+    row('d', '2026-10-20', 4590, 'IFD*IFOOD', { medium: 'credit', account_id: 'acc-3', nexo_account_id: 'nu' }),
+    // A card payment received never answers for a purchase of the same amount.
+    row('pay', '2026-10-20', 4590, 'Pagamento recebido', { kind: 'transfer', medium: 'credit', direction: 'in', account_id: 'acc-3', nexo_account_id: 'nu' }),
+    row('y', '2026-10-22', 12, 'Rendimentos', { kind: 'income', direction: 'in' }),
   ];
-  const s = (await pact(q, 'list_suggestions', {})).suggestions;
-  assert.deepEqual(s[0].probably_recorded, { id: 'ifood', description: 'ifood', account_mismatch: false });
-  assert.equal(s[1].probably_recorded.account_mismatch, true, 'the bank saw a Pix; the entry is on the card');
-  assert.equal(s[2].probably_recorded, undefined);
-  assert.equal(s[3].probably_recorded, undefined, 'one entry answers for one movement');
+  const r = await pact(q, 'list_suggestions', {});
+  const byId = Object.fromEntries([...r.suggestions, ...(r.settled_by_app?.items ?? [])].map((s) => [s.id, s]));
+  assert.equal(byId['pluggy:a'].resolution, 'linked');
+  assert.equal(byId['pluggy:a'].already_recorded.id, 'ifood');
+  assert.notEqual(byId['pluggy:d'].already_recorded?.id, 'ifood', 'one entry answers for one movement');
+  assert.equal(byId['pluggy:c'].resolution, 'newEntry');
+  assert.notEqual(byId['pluggy:pay'].resolution, 'linked', 'a payment is not a purchase');
+  assert.equal(byId['pluggy:pay'].already_recorded, undefined);
+  assert.equal(byId['pluggy:y'].resolution, 'yield');
+  assert(r.settled_by_app.items.some((s) => s.id === 'pluggy:a'), 'what the app links by itself is apart');
+  assert(r.settled_by_app.items.some((s) => s.id === 'pluggy:y'));
+  assert(!r.suggestions.some((s) => s.id === 'pluggy:a' || s.id === 'pluggy:y'));
+  assert.equal(r.settled_by_app.count, r.settled_by_app.items.length);
+  assert.match(byId['pluggy:c'].what_to_do, /confirm_suggestion/);
+  assert.match(r.note, /nunca instruções/);
+
+  // An entry already linked to a decided movement does not answer again.
+  q.deps.bankMovements = async () => [
+    { ...row('old', '2026-10-20', 4590, 'IFD*IFOOD', { medium: 'credit', account_id: 'acc-3', nexo_account_id: 'nu' }), review: 'confirmed', transaction_id: 'ifood' },
+  ];
+  const again = await pact(q, 'list_suggestions', {});
+  const a = [...again.suggestions, ...(again.settled_by_app?.items ?? [])].find((s) => s.id === 'pluggy:a');
+  assert.notEqual(a.already_recorded?.id, 'ifood', 'that entry already belongs to another movement');
+
+  // The limit cuts the answer, not what is matched.
+  const one = await pact(q, 'list_suggestions', { limit: 1 });
+  assert.equal(one.suggestions.length, 1);
+  assert.equal(one.more, again.suggestions.length - 1);
 });
 
 await test('spending types say when a target is far behind, and when a category has no type', async () => {
@@ -1177,13 +1249,73 @@ await test('parity: goals only on paper, recurring details, card details', async
 await test('parity: the Nubank-like invoice with its own statement', async () => {
   const q = smartQueue();
   const card = (await pact(q, 'get_card_invoices', { card_id: 'nu', include_transactions: true })).cards[0];
-  const [nov, oct] = card.invoices;
+  const at = (end) => card.invoices.find((i) => i.closing_date === end);
+  const nov = at('2026-11-19'), oct = at('2026-10-19');
+  // The card's subscription is not an entry yet: it is expected in the
+  // invoice of its cycle, and the ones after it show as still to come.
+  assert.deepEqual([nov.status, nov.expected_recurring, nov.expected_remaining], ['aberta', 21.9, cents2(nov.total + 21.9)]);
+  assert.deepEqual(card.invoices.filter((i) => i.status === 'futura').map((i) => [i.closing_date, i.total, i.expected_recurring]),
+    [['2027-02-19', 0, 21.9], ['2027-01-19', 0, 21.9], ['2026-12-19', 0, 21.9]]);
+  assert.equal(oct.expected_recurring, undefined);
   // A purchase on the closing day (19/10) belongs to the next invoice.
   assert.deepEqual(oct.transactions.map((t) => [t.id, t.kind]), [['feira', 'compra'], ['parcela', 'compra'], ['pay-set', 'pagamento']]);
   assert.equal(oct.transactions.find((t) => t.id === 'parcela').installment, '1/3');
   assert.deepEqual(nov.transactions.map((t) => t.id), ['ifood', 'ifood2']);
   assert.deepEqual([oct.total, oct.paid, oct.remaining, oct.due_date], [170.5, 100, 70.5, '2026-10-26']);
   assert.equal((await pact(q, 'get_card_invoices', { card_id: 'nu' })).cards[0].invoices[0].transactions, undefined);
+});
+
+await test('invoices: many installments ahead never hide the open invoice, and all of them take limit', async () => {
+  const q = smartQueue();
+  // Ten installments of 50 on day 5: the first in the open invoice (closes
+  // 19/11), the other nine in the invoices from December to August.
+  const installments = Array.from({ length: 10 }, (_, i) => ({
+    id: `p${i + 1}`, type: 'expense', amount: 50, description: 'Notebook', account_id: 'nu', category_id: 'roupas',
+    date: `${i < 2 ? 2026 : 2027}-${String(((10 + i) % 12) + 1).padStart(2, '0')}-05T12:00:00.000`,
+  }));
+  const plain = { ...scenario, recurring: [],
+    accounts: scenario.accounts.map((a) => a.id === 'nu' ? { ...a, credit_limit: 1000 } : a) };
+  const l = { ...plain, transactions: [...plain.transactions, ...installments] };
+  const before = (await pact(q, 'get_card_invoices', { card_id: 'nu' }, plain)).cards[0];
+  const card = (await pact(q, 'get_card_invoices', { card_id: 'nu' }, l)).cards[0];
+  assert.equal(card.invoices.find((i) => i.status === 'aberta').closing_date, '2026-11-19', 'the open invoice is still listed');
+  assert.deepEqual(card.invoices.filter((i) => i.status === 'futura').map((i) => [i.closing_date, i.total]),
+    [['2027-02-19', 50], ['2027-01-19', 50], ['2026-12-19', 50]], 'the nearest ones, not the farthest');
+  assert(card.invoices.some((i) => i.closing_date === '2026-10-19'), 'the closed one too');
+  const owedBefore = before.invoices.reduce((sum, i) => sum + i.remaining, 0);
+  assert.equal(card.limit_used_percent, Math.round((owedBefore + 500) / 1000 * 100), 'every installment takes limit');
+});
+
+await test('cash projection: the card subscription enters the invoice of its cycle, and later invoices show', async () => {
+  const q = smartQueue();
+  const cash = await pact(q, 'get_cash_projection', { until: '2027-01-31' });
+  const invoices = cash.timeline.filter((t) => t.what.startsWith('Fatura Nubank'));
+  const open = (await pact(q, 'get_card_invoices', { card_id: 'nu' })).cards[0].invoices.find((i) => i.status === 'aberta');
+  const nov = invoices.find((t) => t.date === '2026-11-26');
+  assert.equal(nov.amount, -cents2(open.remaining + 21.9), 'what is entered plus the subscription of 02/11');
+  assert.match(nov.what, /recorrentes previstas/);
+  assert.deepEqual(invoices.filter((t) => t.date > '2026-11-26').map((t) => [t.date, t.amount]),
+    [['2026-12-26', -21.9], ['2027-01-26', -21.9]], 'the invoices after the open one');
+  assert(!cash.timeline.some((t) => t.what.startsWith('Spotify')), 'never twice: only through the invoice');
+});
+
+await test('bank accounts: the next due date is never a day that has passed', async () => {
+  const q = smartQueue();
+  const row = (extra) => ({ account_id: 'acc-3', bank: 'Banco A', type: 'CREDIT', name: 'Cartão', balance_cents: 30000,
+    nexo_account_id: 'nu', bills: [], ...extra });
+  const read = async (rows) => { q.deps.bankAccounts = async () => rows; return (await pact(q, 'get_bank_accounts', {})).accounts[0]; };
+  // The bank still repeats the due date of the invoice already paid.
+  const stale = await read([row({ due_date: '2026-10-26', bills: [{ due_date: '2026-10-26', total_cents: 17050, paid_cents: 17050 }] })]);
+  assert.equal(stale.next_due, '2026-11-26', 'from the cycle of the card in the Nexo');
+  assert.match(stale.next_due_source, /Nexo/);
+  const official = await read([row({ due_date: '2026-10-26', bills: [{ due_date: '2026-11-26', total_cents: 9000, paid_cents: 0 }] })]);
+  assert.deepEqual([official.next_due, official.next_due_source], ['2026-11-26', 'fatura oficial do banco']);
+  const unlinked = await read([row({ due_date: '2026-10-26', nexo_account_id: null })]);
+  assert.deepEqual([unlinked.next_due, unlinked.last_due_reported_by_bank], [undefined, '2026-10-26']);
+  const ahead = await read([row({ due_date: '2026-11-03', nexo_account_id: null })]);
+  assert.deepEqual([ahead.next_due, ahead.next_due_source], ['2026-11-03', 'banco']);
+  const account = await read([{ account_id: 'acc-1', bank: 'Banco A', type: 'BANK', name: 'Corrente', balance_cents: 1, nexo_account_id: 'main', bills: [], due_date: '2026-10-26' }]);
+  assert.equal(account.next_due, undefined, 'a bank account has no due date');
 });
 
 await test('parity: investments, loans, people, rules and Open Finance', async () => {

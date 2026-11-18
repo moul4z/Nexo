@@ -98,7 +98,7 @@ void main() {
     for (final id in ['r1', 'r2', 'r3', 'r4']) {
       expect(r(id), Resolution.reserve, reason: id);
     }
-    expect(r('yield'), Resolution.smallYield);
+    expect(r('yield'), Resolution.yieldIncome);
     expect(r('ifood'), Resolution.linked);
     expect(result['ifood']!.transaction!.id, 'm-job');
 
@@ -186,7 +186,9 @@ void main() {
       ]);
       expect(r[0].resolution, Resolution.ownName);
       expect(r[1].resolution, Resolution.ownName);
-      expect(r[0].automatic, isTrue);
+      // The other side was not seen: it may be a broker the Nexo does not
+      // read, so the person says where it went (or a transfer rule does).
+      expect(r[0].automatic, isFalse);
       expect(r[2].resolution, Resolution.newEntry);
     });
 

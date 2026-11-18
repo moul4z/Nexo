@@ -41,9 +41,13 @@ class _Remote implements PluggyRemote {
   Future<void> decide(List<Map<String, Object?>> list) async {
     for (final d in list) {
       final row = rows[d['id']];
-      if (row == null || row['review'] == 'confirmed') continue;
-      if (d['review'] == 'pending' && row['review'] != 'ignored') continue;
+      if (row == null || row['review'] == d['review']) continue;
+      if (row['review'] == 'confirmed' &&
+          !(d['review'] == 'pending' && d['reopen'] == true)) {
+        continue;
+      }
       row['review'] = d['review'];
+      if (d['review'] == 'pending') row['manual'] = true;
     }
   }
 
@@ -57,6 +61,11 @@ class _Remote implements PluggyRemote {
         'description': description,
         'occurred_at': at.millisecondsSinceEpoch,
         'review': 'pending',
+        // The bank account is linked to the Nexo account (1.18 server).
+        'bank': 'Banco fictício',
+        'account_id': 'acc-1',
+        'nexo_account_id': 'mp',
+        'direction': kind == 'income' ? 'in' : 'out',
       };
 }
 
@@ -153,7 +162,7 @@ void main() {
 
     await settle(() => shows('3 resolvidas automaticamente'));
     expect(tester.takeException(), isNull);
-    // Linked (Pix = "lanche ufop"), reserve and tiny yield: automatic.
+    // Linked (Pix = "lanche ufop"), reserve and the yield: automatic.
     expect(find.text('3 resolvidas automaticamente'), findsOneWidget);
     expect(find.text('Na dúvida'), findsOneWidget);
     expect(find.text('Novas'), findsOneWidget);
@@ -164,8 +173,15 @@ void main() {
         whereArgs: ['pluggy:pix8']));
     expect(linked!.single['status'], 'confirmed');
     expect(linked.single['transaction_id'], 'lanche');
-    // Nothing became money.
-    expect((await tester.runAsync(DBHelper.getTransactions))!, hasLength(2));
+    // Only the bank's yield became an entry: income "Rendimentos", on the
+    // account the bank is linked to. Nothing else became money.
+    final all = (await tester.runAsync(DBHelper.getTransactions))!;
+    expect(all, hasLength(3));
+    final earned = all.singleWhere((t) => t.id == 'notification:pluggy:yield');
+    expect(earned.type, 'income');
+    expect(earned.amount, closeTo(0.03, 1e-9));
+    expect(earned.accountId, 'mp');
+    expect(app.categoryById(earned.categoryId)!.name, 'Rendimentos');
 
     await tester.tap(find.text('É o mesmo'));
     await settle(() => !shows('Na dúvida'));
@@ -176,7 +192,8 @@ void main() {
     await tester.tap(find.text('3 resolvidas automaticamente'));
     await settle(() => find.text('Desfazer').evaluate().length >= 2);
     final undo = find.text('Desfazer');
-    expect(undo, findsNWidgets(2)); // reserve and yield; the link is final
+    // The reserve and the yield entry; a link to a hand-made entry is final.
+    expect(undo, findsNWidgets(2));
     await tester.tap(undo.first);
     await settle(() => shows('2 resolvidas automaticamente'));
     final pending = await tester.runAsync(NotificationInbox.pending);

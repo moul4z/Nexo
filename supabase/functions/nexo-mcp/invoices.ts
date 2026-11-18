@@ -16,6 +16,27 @@ const addDays = (s: string, n: number) => {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 };
 
+const addMonths = (s: string, n: number, dayOfMonth: number) => {
+  const [y, m] = parts(s);
+  return iso(y, m + n, dayOfMonth);
+};
+
+/// Occurrences of a recurring item from its next date up to [until].
+export function occurrences(r: Row, until: string): string[] {
+  const out: string[] = [];
+  const unit = text(r.freq_unit) || "months";
+  const every = Math.max(1, num(r.freq_val) || 1);
+  const end = r.end_date ? day(text(r.end_date)) : null;
+  let d = day(text(r.next_date));
+  const anchor = Number(d.slice(8, 10));
+  for (let i = 0; i < 400 && d <= until && (!end || d <= end); i++) {
+    out.push(d);
+    d = unit === "days" ? addDays(d, every) : unit === "weeks" ? addDays(d, 7 * every)
+      : unit === "years" ? addMonths(d, 12 * every, anchor) : addMonths(d, every, anchor);
+  }
+  return out;
+}
+
 export interface Cycle { start: string; end: string; due: string | null }
 
 export function cycleFor(date: string, closingDay: number | null, dueDay: number | null): Cycle {
@@ -36,16 +57,30 @@ export function cycleFor(date: string, closingDay: number | null, dueDay: number
   return { start: iso(ey, em - 1, closingDay), end, due: dueAfter(end) };
 }
 
-/// Recent and current invoices of each credit card, newest first.
-export function cardInvoices(l: Ledger, today: string, cardId?: string, withItems = false) {
+export interface InvoiceOptions {
+  /// How many invoices after the open one to list (the nearest ones).
+  future?: number;
+  /// Recurring charges of the card are planned up to this day.
+  planUntil?: string;
+}
+
+/// The invoices of each credit card, newest first: the ones still to come
+/// (installments already entered and recurring charges of the card), the
+/// open one and the last closed ones.
+export function cardInvoices(l: Ledger, today: string, cardId?: string, withItems = false,
+  options: InvoiceOptions = {}) {
   const metas = metadataIndex(l);
+  const future = options.future ?? 3;
+  const planUntil = options.planUntil ?? addDays(today, 31 * (future + 1));
+  const entered = new Set(l.transactions.map((t) => text(t.id)));
   const out = [];
   type Item = { id: string; date: string; kind: string; description: string; amount: number; installment?: string };
   for (const card of l.accounts.filter((a) => a.type === "credit" && (!cardId || a.id === cardId))) {
     const closing = typeof card.statement_day === "number" ? card.statement_day : null;
     const dueDay = typeof card.due_day === "number" ? card.due_day : null;
-    const byEnd = new Map<string, { cycle: Cycle; total: number; paid: number; items: Item[] }>();
-    const slot = (c: Cycle) => byEnd.get(c.end) ?? byEnd.set(c.end, { cycle: c, total: 0, paid: 0, items: [] }).get(c.end)!;
+    const byEnd = new Map<string, { cycle: Cycle; total: number; paid: number; planned: number; items: Item[] }>();
+    const slot = (c: Cycle) =>
+      byEnd.get(c.end) ?? byEnd.set(c.end, { cycle: c, total: 0, paid: 0, planned: 0, items: [] }).get(c.end)!;
     for (const tx of l.transactions) {
       if (tx.account_id !== card.id) continue;
       const m = meta(metas.get(text(tx.id)));
@@ -73,27 +108,44 @@ export function cardInvoices(l: Ledger, today: string, cardId?: string, withItem
           amount: money(cents(num(p.amount))) });
       }
     }
+    // Recurring charges of the card that are not entries yet go to the
+    // invoice of their own cycle, like the app's forecast.
+    for (const r of l.recurring) {
+      if (r.account_id !== card.id) continue;
+      const first = text(r.next_date);
+      for (const d of occurrences(r, planUntil)) {
+        if (d === day(first) && entered.has(`recurring:${text(r.id)}:${first}`)) continue;
+        slot(cycleFor(d, closing, dueDay)).planned += (r.payment_type === "income" ? -1 : 1) * cents(num(r.amount));
+      }
+    }
     const current = cycleFor(today, closing, dueDay);
     slot(current);
-    const invoices = [...byEnd.values()]
+    const recent = [...byEnd.values()]
       .filter((s) => s.cycle.end >= addDays(today, -100))
-      .sort((a, b) => b.cycle.end.localeCompare(a.cycle.end))
-      .slice(0, 4)
-      .map(({ cycle, total, paid, items }) => {
+      .sort((a, b) => b.cycle.end.localeCompare(a.cycle.end));
+    // With installments there are many invoices ahead: the nearest ones, and
+    // never at the cost of the open and the closed ones.
+    const ahead = recent.filter((s) => s.cycle.end > current.end && (s.total !== 0 || s.planned !== 0));
+    const invoices = [...ahead.slice(Math.max(ahead.length - future, 0)), ...recent.filter((s) => s.cycle.end <= current.end).slice(0, 4)]
+      .map(({ cycle, total, paid, planned, items }) => {
         const remaining = Math.max(total - paid, 0);
         const closed = today >= cycle.end;
-        const status = !closed ? "aberta"
+        const status = cycle.end > current.end ? "futura"
+          : !closed ? "aberta"
           : remaining === 0 ? "paga"
           : cycle.due && today > cycle.due ? "atrasada" : "fechada";
         return {
           closing_date: cycle.end, due_date: cycle.due ?? undefined,
           purchases_from: cycle.start, purchases_until: addDays(cycle.end, -1),
           total: money(total), paid: money(paid), remaining: money(remaining), status,
+          expected_recurring: planned !== 0 ? money(planned) : undefined,
+          expected_remaining: planned !== 0 ? money(Math.max(total + planned - paid, 0)) : undefined,
           transactions: withItems ? items.sort((a, b) => a.date.localeCompare(b.date)) : undefined,
         };
       });
     const limit = typeof card.credit_limit === "number" ? cents(card.credit_limit) : null;
-    const owed = invoices.reduce((s, i) => s + cents(i.remaining), 0);
+    // Every installment already entered takes limit, listed here or not.
+    const owed = recent.reduce((s, i) => s + Math.max(i.total - i.paid, 0), 0);
     out.push({
       card_id: text(card.id), card: text(card.name),
       closing_day: closing ?? undefined, due_day: dueDay ?? undefined,
@@ -104,6 +156,6 @@ export function cardInvoices(l: Ledger, today: string, cardId?: string, withItem
   }
   return {
     cards: out,
-    note: "Compras feitas no dia do fechamento entram na fatura seguinte. Pagar fatura: pay_card_invoice (invoice closed = a fechada mais recente).",
+    note: "Compras feitas no dia do fechamento entram na fatura seguinte. total é o que já está lançado; expected_recurring são as recorrentes do cartão que ainda vão entrar naquela fatura, e expected_remaining a soma. Faturas futuras trazem parcelas já lançadas e recorrentes. limit_used_percent conta todas as parcelas lançadas. Pagar fatura: pay_card_invoice (invoice closed = a fechada mais recente).",
   };
 }

@@ -1154,6 +1154,97 @@ class AppProvider extends ChangeNotifier {
     await _checkBudgetAlert(updated);
   }
 
+  /// The IOF of an international card purchase reaches the bank a day or
+  /// two after it, as its own movement: it belongs to the purchase. Adds it
+  /// to the entry and links the bank's IOF movement to it, in one operation.
+  Future<void> addIofToTransaction(
+      String transactionId, String suggestionId, double iof) async {
+    if (!iof.isFinite || iof <= 0) throw ArgumentError('IOF inválido.');
+    final meta =
+        await TransactionMetadataService.instance.getFor(transactionId);
+    if (meta.source.startsWith('transfer:') ||
+        meta.source.startsWith('investment:') ||
+        meta.source.startsWith('shared_bill:') ||
+        meta.source == 'opening_balance') {
+      throw ArgumentError('Esta movimentação não recebe IOF.');
+    }
+    final db = await DBHelper.database;
+    late AppTransaction updated;
+    await ledgerTransaction(db, 'transaction.add_iof', (txn) async {
+      final rows = await txn
+          .query('transactions', where: 'id = ?', whereArgs: [transactionId]);
+      if (rows.isEmpty) throw ArgumentError('Compra não encontrada.');
+      final current = AppTransaction.fromMap(rows.first);
+      if (current.type != 'expense') {
+        throw ArgumentError('O IOF só se soma a uma compra.');
+      }
+      await DBHelper.confirmSuggestion(txn, suggestionId, transactionId);
+      final label =
+          'Inclui IOF de R\$ ${iof.toStringAsFixed(2).replaceAll('.', ',')}';
+      updated = AppTransaction(
+          id: current.id,
+          type: current.type,
+          amount: double.parse((current.amount + iof).toStringAsFixed(2)),
+          description: current.description,
+          accountId: current.accountId,
+          categoryId: current.categoryId,
+          date: current.date,
+          note: current.note.isEmpty ? label : '${current.note} · $label',
+          currency: current.currency);
+      await txn.update('transactions', updated.toMap(),
+          where: 'id = ?', whereArgs: [transactionId]);
+      if (!meta.isPending && meta.affectsBalance) {
+        await txn.rawUpdate(
+            'UPDATE accounts SET balance = balance + ? WHERE id = ?',
+            [_txDelta(updated) - _txDelta(current), current.accountId]);
+      }
+    });
+    await _reloadLedger();
+    await _checkBudgetAlert(updated);
+  }
+
+  /// Undo of [addIofToTransaction]: the purchase goes back to its own
+  /// amount. The IOF movement returns to the inbox by the caller.
+  Future<void> removeIofFromTransaction(
+      String transactionId, double iof) async {
+    if (!iof.isFinite || iof <= 0) throw ArgumentError('IOF inválido.');
+    final meta =
+        await TransactionMetadataService.instance.getFor(transactionId);
+    final db = await DBHelper.database;
+    await ledgerTransaction(db, 'transaction.update', (txn) async {
+      final rows = await txn
+          .query('transactions', where: 'id = ?', whereArgs: [transactionId]);
+      if (rows.isEmpty) return;
+      final current = AppTransaction.fromMap(rows.first);
+      if (current.amount - iof <= 0.004) {
+        throw ArgumentError('O IOF é maior que a compra.');
+      }
+      final label =
+          'Inclui IOF de R\$ ${iof.toStringAsFixed(2).replaceAll('.', ',')}';
+      final updated = AppTransaction(
+          id: current.id,
+          type: current.type,
+          amount: double.parse((current.amount - iof).toStringAsFixed(2)),
+          description: current.description,
+          accountId: current.accountId,
+          categoryId: current.categoryId,
+          date: current.date,
+          note: current.note
+              .replaceAll(' · $label', '')
+              .replaceAll(label, '')
+              .trim(),
+          currency: current.currency);
+      await txn.update('transactions', updated.toMap(),
+          where: 'id = ?', whereArgs: [transactionId]);
+      if (!meta.isPending && meta.affectsBalance) {
+        await txn.rawUpdate(
+            'UPDATE accounts SET balance = balance + ? WHERE id = ?',
+            [_txDelta(updated) - _txDelta(current), current.accountId]);
+      }
+    });
+    await _reloadLedger();
+  }
+
   Future<void> _checkBudgetAlert(AppTransaction t) async {
     if (!settings.budgetAlertsEnabled) return;
     if (t.type != 'expense') return;
@@ -1479,6 +1570,60 @@ class AppProvider extends ChangeNotifier {
     return moved;
   }
 
+  /// A card bill paid at the bank, as Open Finance saw it: registered
+  /// against the invoice that was due (closed before the payment), or the
+  /// open one when the amount only fits there (an early payment), or as a
+  /// plain payment to the card when it fits neither. Never a new expense.
+  Future<void> payInvoiceFromBank({
+    required String fromId,
+    required String cardId,
+    required double amount,
+    required DateTime paidOn,
+    String? suggestionId,
+    String? pairSuggestionId,
+    String? id,
+  }) async {
+    final card = accountById(cardId);
+    if (card == null || card.type != 'credit') {
+      throw ArgumentError('Escolha o cartão da fatura.');
+    }
+    final open = BillingCycle.forDate(paidOn, card.statementDay, card.dueDay);
+    final closed = BillingCycle.forDate(
+        open.start.subtract(const Duration(days: 1)),
+        card.statementDay,
+        card.dueDay);
+    final db = await DBHelper.database;
+    DateTime? cycleEnd;
+    for (final cycle in [closed, open]) {
+      final purchases = await db.rawQuery(
+          "SELECT COALESCE(SUM(CASE WHEN t.type = 'income' THEN -t.amount ELSE t.amount END), 0) AS total FROM transactions t LEFT JOIN transaction_metadata m ON m.transaction_id = t.id WHERE t.account_id = ? AND t.date >= ? AND t.date < ? AND (COALESCE(m.exclude_from_spending, 0) = 0 OR m.source = 'opening_balance' OR m.source LIKE 'shared_bill:%')",
+          [
+            cardId,
+            cycle.start.toIso8601String(),
+            cycle.until.toIso8601String()
+          ]);
+      final paid = await db.rawQuery(
+          'SELECT COALESCE(SUM(amount), 0) AS total FROM card_invoice_payments WHERE card_id = ? AND cycle_end = ?',
+          [cardId, DateFormat('yyyy-MM-dd').format(cycle.end)]);
+      final remaining = (purchases.first['total'] as num).toDouble() -
+          (paid.first['total'] as num).toDouble();
+      if (amount <= remaining + 0.005) {
+        cycleEnd = cycle.end;
+        break;
+      }
+    }
+    await addTransfer(
+        fromId: fromId,
+        toId: cardId,
+        fromAmount: amount,
+        invoiceCycleEnd: cycleEnd,
+        occurredAt: paidOn,
+        note: 'Pagamento da fatura ${card.name}',
+        suggestionId: suggestionId,
+        pairSuggestionId: pairSuggestionId,
+        id: id);
+  }
+
   Future<void> addTransfer({
     required String fromId,
     required String toId,
@@ -1487,7 +1632,9 @@ class AppProvider extends ChangeNotifier {
     String note = '',
     DateTime? invoiceCycleEnd,
     String? suggestionId,
+    String? pairSuggestionId,
     DateTime? occurredAt,
+    String? id,
   }) async {
     if (fromId == toId ||
         !fromAmount.isFinite ||
@@ -1514,8 +1661,10 @@ class AppProvider extends ChangeNotifier {
     // A transfer is neither spending nor income: no category.
     const catId = '';
 
+    // A fixed id (from a bank movement) makes the same transfer the same
+    // on every device: registered twice, it is still one.
     final debit = AppTransaction(
-      id: newId(),
+      id: id ?? newId(),
       type: 'expense',
       amount: fromAmount,
       description: fromCurrency == toCurrency
@@ -1528,7 +1677,7 @@ class AppProvider extends ChangeNotifier {
       currency: fromCurrency,
     );
     final credit = AppTransaction(
-      id: newId(),
+      id: id == null ? newId() : '$id:in',
       type: 'income',
       amount: creditAmount,
       description: fromCurrency == toCurrency
@@ -1575,6 +1724,9 @@ class AppProvider extends ChangeNotifier {
       }
       if (suggestionId != null)
         await DBHelper.confirmSuggestion(txn, suggestionId, debit.id);
+      // The other bank's side of the same money: it is the credit leg.
+      if (pairSuggestionId != null)
+        await DBHelper.confirmSuggestion(txn, pairSuggestionId, credit.id);
       for (final tx in [debit, credit]) {
         await txn.insert('transactions', tx.toMap());
         await txn.insert(

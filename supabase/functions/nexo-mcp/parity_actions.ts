@@ -9,7 +9,7 @@ import {
 import { balanceCents, callTool, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { envelopeById, envelopes, spendingTypes } from "./envelopes.ts";
 import { checkSetting, settingDefs, sharedSettings } from "./settings.ts";
-import { cardInvoices } from "./invoices.ts";
+import { cardInvoices, occurrences } from "./invoices.ts";
 import { FX_SCALE, lastRate, ratio } from "./portfolio.ts";
 
 type Args = Record<string, unknown>;
@@ -251,6 +251,13 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
     inputSchema: obj({ id: idField, from_account_id: idField, to_account_id: idField }, ["id", "from_account_id", "to_account_id"]),
   },
   {
+    name: "link_suggestion", title: "Vincular sugestão a um lançamento",
+    description: "Liga uma sugestão do Open Finance a um lançamento que já existe (a mesma movimentação, já lançada): ela sai da fila e nada é lançado de novo. Para o IOF de uma compra internacional cobrado depois, add_amount true soma o valor ao lançamento da compra.",
+    inputSchema: obj({ id: idField, transaction_id: idField,
+      add_amount: { type: "boolean", description: "true: soma o valor da sugestão ao lançamento (IOF da compra). Padrão: só vincula." } },
+    ["id", "transaction_id"]),
+  },
+  {
     name: "get_bank_accounts", title: "Saldo do banco × Nexo",
     description: "Contas do Open Finance: saldo informado pelo banco, limite e faturas oficiais dos cartões, a conta do Nexo vinculada e a diferença para o saldo do Nexo (soma de várias contas do banco quando vinculadas à mesma). Para acertar, use adjust_account_balance.",
     inputSchema: obj({}),
@@ -444,20 +451,28 @@ const addMonths = (iso: string, n: number, dayOfMonth: number) => {
   return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), Math.min(dayOfMonth, last))).toISOString().slice(0, 10);
 };
 
-/// Occurrences of a recurring item from its next date up to [until].
-function occurrences(r: Row, until: string): string[] {
-  const out: string[] = [];
-  const unit = text(r.freq_unit) || "months";
-  const every = Math.max(1, num(r.freq_val) || 1);
-  const end = r.end_date ? day(text(r.end_date)) : null;
-  let d = day(text(r.next_date));
-  const anchor = Number(d.slice(8, 10));
-  for (let i = 0; i < 400 && d <= until && (!end || d <= end); i++) {
-    out.push(d);
-    d = unit === "days" ? addDays(d, every) : unit === "weeks" ? addDays(d, 7 * every)
-      : unit === "years" ? addMonths(d, 12 * every, anchor) : addMonths(d, every, anchor);
+/// When a card charges next. The bank only reports an invoice after it
+/// closes, and keeps the last due date it sent: a day that has passed is
+/// never "next". Order: the official invoice still to pay, the card's cycle
+/// in the Nexo, the date of the bank when it is still ahead.
+function nextDue(l: Ledger, r: Record<string, unknown>, today: string): Record<string, unknown> {
+  if (r.type !== "CREDIT") return {};
+  const bills = Array.isArray(r.bills) ? r.bills as Record<string, unknown>[] : [];
+  const official = bills
+    .filter((b) => typeof b.due_date === "string" && b.due_date >= today && num(b.total_cents) > num(b.paid_cents))
+    .map((b) => b.due_date as string).sort()[0];
+  if (official) return { next_due: official, next_due_source: "fatura oficial do banco" };
+  const card = typeof r.nexo_account_id === "string" ? find(l.accounts, r.nexo_account_id) : undefined;
+  if (card && card.type === "credit") {
+    const mine = (cardInvoices(l, today, text(card.id)).cards[0]?.invoices ?? [])
+      .filter((i) => i.due_date && i.due_date >= today && cents(i.expected_remaining ?? i.remaining) > 0)
+      .map((i) => i.due_date as string).sort()[0];
+    if (mine) {
+      return { next_due: mine, next_due_source: "ciclo do cartão no Nexo (o banco só informa a fatura depois do fechamento)" };
+    }
   }
-  return out;
+  if (typeof r.due_date === "string" && r.due_date >= today) return { next_due: r.due_date, next_due_source: "banco" };
+  return typeof r.due_date === "string" ? { last_due_reported_by_bank: r.due_date } : {};
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────────
@@ -491,7 +506,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           empréstimos: { read: ["get_loans"], write: ["add_loan", "update_loan", "delete_loan", "pay_loan_installment", "skip_loan_installment", "delete_loan_payment"] },
           emprestado_e_devido: { read: ["get_lended"], write: ["add_lended", "update_lended", "settle_lended", "delete_lended", "update_person", "delete_person"] },
           bens_e_desejos: { read: ["get_assets", "get_wishlist"], write: ["add_asset", "update_asset", "delete_asset", "add_wishlist_item", "update_wishlist_item", "delete_wishlist_item"] },
-          open_finance: { read: ["list_suggestions", "get_bank_sync_status", "get_import_rules", "get_bank_accounts"], write: ["confirm_suggestion", "confirm_suggestion_as_transfer", "ignore_suggestions", "save_import_rule", "delete_import_rule", "refresh_bank_data", "link_bank_account"] },
+          open_finance: { read: ["list_suggestions", "get_bank_sync_status", "get_import_rules", "get_bank_accounts"], write: ["confirm_suggestion", "confirm_suggestion_as_transfer", "link_suggestion", "ignore_suggestions", "save_import_rule", "delete_import_rule", "refresh_bank_data", "link_bank_account"] },
           configurações: { read: ["get_settings"], write: ["set_setting", "set_spending_targets"] },
           análises: { read: ["get_financial_summary", "get_spending_by_category", "get_spending_breakdown", "get_monthly_trend", "get_net_worth", "get_cash_projection"] },
           pedidos: { read: ["get_request_status", "list_requests", "describe_app_capabilities"], write: ["undo_request"] },
@@ -892,6 +907,22 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       return pending((await enqueue("suggestion.transfer", { id, from_account_id: text(from.id), to_account_id: text(to.id) })).id,
         "Sugestão como transferência");
     }
+    case "link_suggestion": {
+      only(args, ["id", "transaction_id", "add_amount"]);
+      const id = str(args, "id", 80)!;
+      if (!/^pluggy:[0-9A-Za-z-]{1,64}$/.test(id)) throw new ToolInputError("id de sugestão inválido.");
+      if (args.add_amount !== undefined && typeof args.add_amount !== "boolean") {
+        throw new ToolInputError("add_amount deve ser verdadeiro ou falso.");
+      }
+      const t = find(l.transactions, args.transaction_id);
+      if (!t) throw new ToolInputError("Lançamento não encontrado. Use list_transactions.");
+      if (args.add_amount === true && t.type !== "expense") {
+        throw new ToolInputError("O IOF só se soma a uma compra (despesa).");
+      }
+      return pending((await enqueue("suggestion.link", {
+        id, transaction_id: text(t.id), add_amount: args.add_amount === true,
+      })).id, args.add_amount === true ? "IOF somado à compra" : "Vínculo da sugestão");
+    }
     case "get_bank_accounts": {
       only(args, []);
       if (!deps.bankAccounts) return { accounts: [], note: "O servidor ainda não informa as contas do banco." };
@@ -909,7 +940,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           bank_balance: typeof r.balance_cents === "number" ? money(r.balance_cents) : null,
           credit_limit: typeof r.credit_limit_cents === "number" ? money(r.credit_limit_cents) : undefined,
           available: typeof r.available_cents === "number" ? money(r.available_cents) : undefined,
-          next_due: r.due_date ?? undefined,
+          ...nextDue(l, r, today),
           official_invoices: Array.isArray(r.bills) && r.bills.length
             ? (r.bills as Record<string, unknown>[]).slice(0, 4).map((b) => ({
               due_date: b.due_date, total: money(num(b.total_cents)), paid: money(num(b.paid_cents)),
@@ -1053,10 +1084,19 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         if (due > until) continue;
         items.push({ date: due, what: `${text(t.description)} (pendente)`, amount: (t.type === "income" ? 1 : -1) * cents(num(t.amount)) });
       }
-      for (const card of cardInvoices(l, today).cards) {
+      // Every invoice up to the day asked: what is entered (installments
+      // included) plus the recurring charges of the card, in their cycle.
+      for (const card of cardInvoices(l, today, undefined, false, { future: 14, planUntil: until }).cards) {
+        if (find(l.accounts, card.card_id)?.exclude_from_total === 1) continue;
         for (const inv of card.invoices) {
-          if (!inv.due_date || inv.due_date > until || inv.remaining <= 0) continue;
-          items.push({ date: inv.due_date, what: `Fatura ${card.card} (vence ${inv.due_date})`, amount: -cents(inv.remaining) });
+          const owed = cents(inv.expected_remaining ?? inv.remaining);
+          if (!inv.due_date || inv.due_date > until || owed <= 0) continue;
+          const late = inv.due_date < today;
+          items.push({
+            date: late ? today : inv.due_date,
+            what: `Fatura ${card.card} (${late ? "venceu em" : "vence"} ${inv.due_date}${inv.expected_recurring ? `, com ${money(cents(inv.expected_recurring))} de recorrentes previstas` : ""})`,
+            amount: -owed,
+          });
         }
       }
       items.sort((a, b) => a.date.localeCompare(b.date));
@@ -1070,7 +1110,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         from: today, until, starting_cash: money(start), ending_cash: money(running),
         lowest_point: { balance: money(lowest), date: lowestDate },
         timeline: timeline.slice(0, 120), truncated: timeline.length > 120 ? timeline.length : undefined,
-        note: "Estimativa: contas em reais que entram no total, sem cartões e ouro. Recorrentes de cartão entram pela fatura. Gastos variáveis do dia a dia não estão incluídos.",
+        note: "Estimativa: contas em reais que entram no total, sem cartões e ouro. Cada fatura que vence até a data entra no vencimento, com as parcelas já lançadas e as recorrentes do cartão no ciclo certo. Gastos variáveis do dia a dia não estão incluídos.",
       };
     }
     case "get_spending_breakdown": {

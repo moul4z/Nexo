@@ -87,6 +87,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Para revisar: listar | list_suggestions | ok | |
 | Para revisar: confirmar com edição | confirm_suggestion | ok | conta, categoria, tipo, descrição, subcategoria, observação |
 | Para revisar: como transferência | confirm_suggestion_as_transfer | ok | |
+| Para revisar: é o mesmo lançamento / somar o IOF à compra | link_suggestion | ok | 1.18: vincula a um lançamento que já existe; `add_amount` soma o valor (IOF) |
 | Para revisar: ignorar, por filtro | ignore_suggestions | ok | prévia |
 | Regras automáticas de categoria | get_import_rules, save_import_rule, delete_import_rule | ok | |
 | Dados do banco até quando | get_bank_sync_status | ok | |

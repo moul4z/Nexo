@@ -5,33 +5,51 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/db_helper.dart';
 import '../models/models.dart';
 import '../models/transaction_metadata.dart';
+import '../sync/sync_controller.dart';
+import 'diagnostics.dart';
 import 'import_rules_service.dart';
 import 'notification_inbox.dart';
+import 'platform_capabilities.dart';
 import 'pluggy_inbox.dart';
 import 'reconciliation.dart';
 
 /// What the inbox shows after the app did the boring part.
 class InboxState {
-  const InboxState(this.matches, this.resolved);
+  const InboxState(this.matches, this.resolved, {this.deferred = const []});
 
   /// Movements that need the person (maybe, own transfer, new).
   final List<Match> matches;
 
   /// Resolved automatically before, newest first: id → reason.
   final List<AutoResolved> resolved;
+
+  /// Decided, but registered only by the device that writes (the phone):
+  /// a yield, a transfer between the person's accounts, a rule.
+  final List<Match> deferred;
 }
 
 class AutoResolved {
   const AutoResolved(
       this.id, this.reason, this.description, this.amountCents, this.at,
-      {this.transactionId});
+      {this.transactionId, this.created = false, this.pairId, this.iof});
   final String id, reason, description;
   final int amountCents;
   final DateTime at;
   final String? transactionId;
 
-  /// Links are final on every device; only ignores can be undone.
-  bool get undoable => transactionId == null;
+  /// The app registered an entry or a transfer for it (not just a link).
+  final bool created;
+
+  /// The other bank's side of a transfer the app registered.
+  final String? pairId;
+
+  /// The IOF (cents) the app added to [transactionId].
+  final int? iof;
+
+  /// Ignores go back to the inbox; what the app registered by itself is
+  /// deleted (or the IOF taken out) and the movement goes back too. A link
+  /// to an entry the person made is final on every device.
+  bool get undoable => transactionId == null || created || iof != null;
 
   Map<String, Object?> toJson() => {
         'reason': reason,
@@ -39,6 +57,9 @@ class AutoResolved {
         'amount_cents': amountCents,
         'at': at.millisecondsSinceEpoch,
         if (transactionId != null) 'transaction_id': transactionId,
+        if (created) 'created': true,
+        if (pairId != null) 'pair_id': pairId,
+        if (iof != null) 'iof': iof,
       };
   static AutoResolved fromJson(String id, Map<String, dynamic> j) =>
       AutoResolved(
@@ -47,18 +68,69 @@ class AutoResolved {
           j['description'] as String,
           j['amount_cents'] as int,
           DateTime.fromMillisecondsSinceEpoch(j['at'] as int),
-          transactionId: j['transaction_id'] as String?);
+          transactionId: j['transaction_id'] as String?,
+          created: j['created'] == true,
+          pairId: j['pair_id'] as String?,
+          iof: j['iof'] as int?);
 }
 
+/// What moves money in the inbox, done by the app with its own rules.
+abstract interface class InboxWriter {
+  /// Only one device registers by itself, so two never create the same
+  /// entry: the phone, or a device that does not sync.
+  bool get canCreate;
+
+  /// A new entry for [m] (id `notification:<suggestion>`), linked to it.
+  Future<String> addEntry(PendingMovement m,
+      {required String type,
+      required String accountId,
+      required String categoryId,
+      required String description,
+      String subcategory = '',
+      String? note});
+
+  /// A transfer for [out] (and the other bank's side, when seen).
+  Future<void> addTransfer(PendingMovement out, PendingMovement? incoming,
+      {required String fromId, required String toId});
+
+  /// A card bill paid from the bank: the bank's side, the card's side, or
+  /// both. A transfer tied to the invoice, never spending.
+  Future<void> addInvoicePayment(PendingMovement? bank, PendingMovement? card,
+      {required String fromId, required String cardId});
+
+  /// Adds the IOF charged the next day to the purchase already registered.
+  Future<void> addIof(PendingMovement iof, String transactionId);
+
+  /// Takes back out an IOF the app added (undo).
+  Future<void> removeIof(String transactionId, int cents);
+
+  /// The category for yields ("Rendimentos"), created when missing.
+  Future<String> yieldCategory();
+
+  /// Deletes what the app registered by itself (undo).
+  Future<void> deleteEntry(String transactionId);
+}
+
+/// The phone writes; a device that does not sync writes for itself.
+bool defaultCanCreate() =>
+    PlatformCapabilities.android || !(SyncController.instance?.bound ?? false);
+
 /// Applies [reconcile] to the pending suggestions: links what is certainly an
-/// existing entry, sets aside reversals, reserve moves and tiny yields, and
-/// remembers why, so the person can see and undo it. Never creates money.
+/// existing entry, sets aside reversals, reserve moves and moves between the
+/// person's own accounts, and, on the device that writes, registers yields,
+/// transfers between the person's accounts, the IOF of a purchase and what a
+/// "lançar sozinho" rule says. Remembers why, so the person can see and undo
+/// it. Never creates money silently.
 class InboxReconciler {
   static const _resolvedKey = 'nexo_inbox_resolved_v1';
   static const _manualKey = 'nexo_inbox_manual_v1';
   static const _dismissedKey = 'nexo_inbox_dismissed_pairs_v1';
   static const ownerKey = 'nexo_owner_names_v1';
   static const autoKey = 'nexo_inbox_auto_v1';
+
+  /// income (default): yields become income "Rendimentos"; ignore: they
+  /// leave the inbox without an entry (the balance drifts by the yields).
+  static const yieldsKey = 'nexo_inbox_yields_v1';
 
   static Future<SharedPreferences> get _prefs =>
       SharedPreferences.getInstance();
@@ -91,6 +163,7 @@ class InboxReconciler {
       required Map<String, TransactionMetadata> metadata,
       required List<Account> accounts,
       required String profileName,
+      InboxWriter? writer,
       Future<void> Function()? push,
       Duration every = const Duration(minutes: 10)}) async {
     final now = DateTime.now();
@@ -105,7 +178,8 @@ class InboxReconciler {
           transactions: transactions,
           metadata: metadata,
           accounts: accounts,
-          profileName: profileName);
+          profileName: profileName,
+          writer: writer);
       await push?.call();
     } catch (_) {
       // The screen does the same when opened.
@@ -117,8 +191,16 @@ class InboxReconciler {
   static Future<void> setAutomatic(bool on) async =>
       (await _prefs).setBool(autoKey, on);
 
+  static Future<bool> yieldsAsIncome() async =>
+      ((await _prefs).getString(yieldsKey) ?? 'income') == 'income';
+  static Future<void> setYieldsAsIncome(bool on) async =>
+      (await _prefs).setString(yieldsKey, on ? 'income' : 'ignore');
+
   static Future<Map<String, AutoResolved>> _resolved() async {
-    final raw = (await _prefs).getString(_resolvedKey);
+    final prefs = await _prefs;
+    // Another engine (the headless pass) may have written meanwhile.
+    await prefs.reload();
+    final raw = prefs.getString(_resolvedKey);
     if (raw == null) return {};
     try {
       return {
@@ -153,9 +235,26 @@ class InboxReconciler {
         'reversal' => 'Pagamento estornado',
         'reserve' => 'Movimento de reserva',
         'ownName' => 'Transferência sua',
+        'internal' => 'Entre contas suas',
+        'ownTransfer' => 'Transferência registrada',
+        'yieldIncome' => 'Rendimento lançado',
+        'yieldIgnored' => 'Rendimento ignorado',
         'smallYield' => 'Rendimento pequeno',
+        'iof' => 'IOF somado à compra',
+        'rule' => 'Lançado pela regra',
         _ => 'Resolvido',
       };
+
+  static List<ReconcileRule> _rules(List<ImportRule> rules) => [
+        for (final r in rules)
+          ReconcileRule(
+              id: r.id,
+              pattern: r.pattern,
+              type: r.type,
+              categoryId: r.categoryId,
+              auto: r.auto,
+              targetAccountId: r.targetAccountId)
+      ];
 
   /// Reconciles the pending suggestions and applies the automatic outcomes.
   static Future<InboxState> run({
@@ -164,28 +263,45 @@ class InboxReconciler {
     required Map<String, TransactionMetadata> metadata,
     List<Account> accounts = const [],
     String profileName = '',
+    InboxWriter? writer,
+    DateTime? now,
   }) async {
     final db = await DBHelper.database;
-    final linked = {
-      for (final r in await db.query('notification_suggestions',
-          columns: ['transaction_id'],
-          where: "status = 'confirmed' AND transaction_id IS NOT NULL"))
-        r['transaction_id'] as String
+    final confirmed = await db.query('notification_suggestions',
+        where: "status = 'confirmed' AND transaction_id IS NOT NULL");
+    final linked = {for (final r in confirmed) r['transaction_id'] as String};
+    // Undone here, or on another device (the server tells).
+    final manual = {
+      ...await _set(_manualKey),
+      for (final r in pendingRows)
+        if (r['manual'] == 1) r['id'] as String
     };
-    final manual = await _set(_manualKey);
     final rules = await ImportRulesService.load();
     final learned = categoryFromHistory(transactions, metadata);
+    final credit = {
+      for (final a in accounts)
+        if (a.type == 'credit') a.id
+    };
+    final known = {for (final a in accounts) a.id};
     final matches = reconcile(
-        pending: [for (final r in pendingRows) PendingMovement.fromRow(r)],
+        pending: [
+          for (final r in pendingRows)
+            _withKnownAccount(PendingMovement.fromRow(r), known)
+        ],
         transactions: transactions,
         metadata: metadata,
         linkedIds: linked,
         ownerNames: await _owners(profileName),
-        creditAccounts: {
-          for (final a in accounts)
-            if (a.type == 'credit') a.id
-        },
+        creditAccounts: credit,
         dismissedPairs: await _set(_dismissedKey),
+        settled: [
+          for (final r in confirmed)
+            // Expired rows keep no amount.
+            if ((r['amount_cents'] as int? ?? 0) > 0)
+              (PendingMovement.fromRow(r), r['transaction_id'] as String)
+        ],
+        rules: _rules(rules),
+        now: now,
         learnedCategory: (m) {
           final type = m.outgoing ? 'expense' : 'income';
           final rule = rules
@@ -199,35 +315,141 @@ class InboxReconciler {
           return rule?.categoryId ?? learned(m);
         });
     final resolved = await _resolved();
-    final keep = <Match>[];
+    final keep = <Match>[], deferred = <Match>[];
     final auto = await automatic();
+    final yieldsIncome = await yieldsAsIncome();
+    final canCreate = writer?.canCreate ?? false;
+    final done = <String>{};
     for (final m in matches) {
+      final mv = m.movement;
+      if (done.contains(mv.id)) continue;
       // Undone by the person: never decided by the app again.
-      if (!auto || !m.automatic || manual.contains(m.movement.id)) {
-        keep.add(m.automatic
-            ? Match(m.movement, Resolution.newEntry, categoryId: m.categoryId)
-            : m);
+      if (!auto || !m.automatic || manual.contains(mv.id)) {
+        keep.add(m.automatic ? _asQuestion(m) : m);
         continue;
       }
-      final mv = m.movement;
+      final creates = switch (m.resolution) {
+        Resolution.yieldIncome => yieldsIncome,
+        Resolution.ownTransfer || Resolution.rule || Resolution.iof => true,
+        _ => false,
+      };
+      if (creates && (!canCreate || writer == null)) {
+        deferred.add(m);
+        continue;
+      }
       try {
-        if (m.resolution == Resolution.linked) {
-          await DBHelper.confirmSuggestion(db, mv.id, m.transaction!.id);
-        } else {
-          await NotificationInbox.ignore(mv.id);
+        String? createdId, pairId;
+        int? iof;
+        var reason = m.resolution.name;
+        switch (m.resolution) {
+          case Resolution.linked:
+            await DBHelper.confirmSuggestion(db, mv.id, m.transaction!.id);
+          case Resolution.yieldIncome when yieldsIncome:
+            final account = mv.nexoAccountId;
+            if (account == null) {
+              // Without the bank linked to a Nexo account: the person picks.
+              keep.add(Match(mv, Resolution.newEntry,
+                  categoryId: await writer!.yieldCategory()));
+              continue;
+            }
+            createdId = await writer!.addEntry(mv,
+                type: 'income',
+                accountId: account,
+                categoryId: await writer.yieldCategory(),
+                description:
+                    mv.bank == null ? 'Rendimentos' : 'Rendimentos ${mv.bank}');
+          case Resolution.yieldIncome:
+            reason = 'yieldIgnored';
+            await NotificationInbox.ignore(mv.id);
+          case Resolution.ownTransfer:
+            final pair = m.pair;
+            // Registered once, from the side that left the account.
+            if (!mv.outgoing && pair != null) continue;
+            await writer!.addTransfer(mv, pair,
+                fromId: m.fromAccountId!, toId: m.toAccountId!);
+            createdId = 'notification:${mv.id}';
+            pairId = pair?.id;
+            if (pair != null) done.add(pair.id);
+          case Resolution.iof:
+            await writer!.addIof(mv, m.transaction!.id);
+            iof = mv.amountCents;
+          case Resolution.rule:
+            if (m.toAccountId != null && m.fromAccountId != null) {
+              await writer!.addTransfer(mv, null,
+                  fromId: m.fromAccountId!, toId: m.toAccountId!);
+              createdId = 'notification:${mv.id}';
+            } else {
+              createdId = await writer!.addEntry(mv,
+                  type: mv.outgoing ? 'expense' : 'income',
+                  accountId: mv.nexoAccountId!,
+                  categoryId: m.categoryId!,
+                  description: mv.description,
+                  note: 'Lançado pela regra de importação');
+            }
+          default:
+            // reversal, reserve, internal: nothing to register.
+            await NotificationInbox.ignore(mv.id);
         }
+        done.add(mv.id);
+        resolved[mv.id] = AutoResolved(
+            mv.id, reason, mv.description, mv.amountCents, DateTime.now(),
+            transactionId: createdId ?? m.transaction?.id,
+            created: createdId != null,
+            pairId: pairId,
+            iof: iof);
       } on StateError {
         // Resolved meanwhile (another device or screen): nothing to do.
         continue;
+      } on ArgumentError {
+        // The account or category is gone: leave it for the person.
+        keep.add(_asQuestion(m));
+      } catch (e) {
+        // Anything else stops this movement only: what was already done in
+        // this round stays listed, with its undo.
+        Diagnostics.note('inbox', e);
+        keep.add(_asQuestion(m));
       }
-      resolved[mv.id] = AutoResolved(mv.id, m.resolution.name, mv.description,
-          mv.amountCents, DateTime.now(),
-          transactionId: m.transaction?.id);
     }
     await _saveResolved(resolved);
     return InboxState(
-        keep, resolved.values.toList()..sort((a, b) => b.at.compareTo(a.at)));
+        keep, resolved.values.toList()..sort((a, b) => b.at.compareTo(a.at)),
+        deferred: deferred);
   }
+
+  /// What the app would have done by itself, as a question to the person.
+  static Match _asQuestion(Match m) => switch (m.resolution) {
+        Resolution.linked => Match(m.movement, Resolution.maybe,
+            transaction: m.transaction, score: m.score, pair: m.pair),
+        Resolution.ownTransfer || Resolution.iof || Resolution.rule => Match(
+            m.movement, m.resolution,
+            transaction: m.transaction,
+            pair: m.pair,
+            categoryId: m.categoryId,
+            fromAccountId: m.fromAccountId,
+            toAccountId: m.toAccountId,
+            ruleId: m.ruleId),
+        _ => Match(m.movement, Resolution.newEntry, categoryId: m.categoryId),
+      };
+
+  /// A link to a Nexo account that no longer exists counts as no link.
+  static PendingMovement _withKnownAccount(
+          PendingMovement m, Set<String> known) =>
+      m.nexoAccountId == null || known.contains(m.nexoAccountId)
+          ? m
+          : PendingMovement(
+              id: m.id,
+              amountCents: m.amountCents,
+              description: m.description,
+              kind: m.kind,
+              occurredAt: m.occurredAt,
+              medium: m.medium,
+              direction: m.direction,
+              accountId: m.accountId,
+              bank: m.bank,
+              operationRef: m.operationRef,
+              paymentRef: m.paymentRef,
+              sameOwner: m.sameOwner,
+              counterparty: m.counterparty);
 
   /// "It is the same": the movement is the existing entry.
   static Future<void> link(String suggestionId, String transactionId) async =>
@@ -238,16 +460,39 @@ class InboxReconciler {
   static Future<void> dismissPair(String suggestionId, String transactionId) =>
       _add(_dismissedKey, ['$suggestionId|$transactionId']);
 
-  /// Back to the inbox; the app will not decide it by itself again.
-  static Future<void> undo(AutoResolved r) async {
+  /// Back to the inbox; the app will not decide it by itself again. What
+  /// the app registered by itself is deleted first (or the IOF it added is
+  /// taken out of the purchase).
+  static Future<void> undo(AutoResolved r, {InboxWriter? writer}) async {
     if (!r.undoable) return;
-    await _add(_manualKey, [r.id]);
-    await NotificationInbox.undoIgnore(r.id);
-    if (PluggyInbox.isPluggy(r.id))
-      await PluggyInbox.instance?.undoIgnore(r.id);
+    final ids = [r.id, if (r.pairId != null) r.pairId!];
+    if ((r.created || r.iof != null) && writer == null) return;
+    await _add(_manualKey, ids);
+    if (r.created && r.transactionId != null) {
+      await writer!.deleteEntry(r.transactionId!);
+      await reopen(ids);
+    } else if (r.iof != null && r.transactionId != null) {
+      await writer!.removeIof(r.transactionId!, r.iof!);
+      await reopen(ids);
+    } else {
+      await NotificationInbox.undoIgnore(r.id);
+      if (PluggyInbox.isPluggy(r.id)) await PluggyInbox.instance?.pushNow();
+    }
     final all = await _resolved()
       ..remove(r.id);
     await _saveResolved(all);
+  }
+
+  /// A linked movement whose entry was deleted goes back to the inbox, here
+  /// and on the server (other devices follow when the deletion reaches them).
+  static Future<void> reopen(List<String> ids) async {
+    final db = await DBHelper.database;
+    for (final id in ids) {
+      await db.update('notification_suggestions',
+          {'status': 'pending', 'transaction_id': null},
+          where: "id = ? AND status = 'confirmed'", whereArgs: [id]);
+    }
+    if (ids.any(PluggyInbox.isPluggy)) await PluggyInbox.instance?.pushNow();
   }
 
   /// Ignores many at once (own transfers already in the balances, or what

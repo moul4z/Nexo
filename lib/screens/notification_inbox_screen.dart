@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -11,9 +13,9 @@ import '../theme/app_theme.dart';
 import '../services/notification_preferences.dart';
 import '../services/pluggy_inbox.dart';
 import '../services/inbox_reconciler.dart';
+import '../services/inbox_writer.dart';
 import '../services/reconciliation.dart';
 import '../widgets/nexo_ui.dart';
-import '../widgets/android_feature_notice.dart';
 import '../services/category_memory.dart';
 import '../services/subscription_detector.dart';
 import 'recurring_screen.dart';
@@ -54,10 +56,13 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
     if (state == AppLifecycleState.resumed) reload();
   }
 
-  static bool get _available => PluggyInbox.instance != null;
+  InboxWriter _writer({bool here = false}) =>
+      AppInboxWriter(context.read<AppProvider>(),
+          canCreate: here ? true : null);
 
-  Future<void> reload({bool force = false}) async {
-    if (!_available) return;
+  /// [createHere]: the person asked this device to register what the phone
+  /// would register by itself.
+  Future<void> reload({bool force = false, bool createHere = false}) async {
     try {
       String? syncError;
       String? freshness;
@@ -84,7 +89,10 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
           transactions: app.transactions,
           metadata: app.transactionMetadata,
           accounts: app.accounts,
-          profileName: app.settings.userName);
+          profileName: app.settings.userName,
+          writer: _writer(here: createHere));
+      // What the app settled leaves the assistant's queue too.
+      unawaited(PluggyInbox.instance?.pushNow());
       if (mounted)
         setState(() {
           state = result;
@@ -131,8 +139,31 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
   Future<void> _undoIgnore(Iterable<String> ids) async {
     for (final id in ids) {
       await NotificationInbox.undoIgnore(id);
-      if (PluggyInbox.isPluggy(id)) await PluggyInbox.instance?.undoIgnore(id);
     }
+    if (ids.any(PluggyInbox.isPluggy)) await PluggyInbox.instance?.pushNow();
+  }
+
+  Map<String, dynamic> _row(Match m, {PendingMovement? pair, Match? iof}) {
+    final mv = m.movement;
+    return {
+      'id': mv.id,
+      'app_id': PluggyInbox.isPluggy(mv.id) ? 'pluggy' : 'notification',
+      'amount_cents': mv.amountCents,
+      'description': mv.description,
+      'kind': mv.kind,
+      'medium': mv.medium,
+      'occurred_at': mv.occurredAt.millisecondsSinceEpoch,
+      'direction': mv.outgoing ? 'out' : 'in',
+      'bank': mv.bank,
+      'nexo_account_id': mv.nexoAccountId,
+      'counterparty': mv.counterparty,
+      if (pair != null) 'pair_id': pair.id,
+      if (pair != null) 'pair_nexo_account_id': pair.nexoAccountId,
+      if (m.fromAccountId != null) 'from_account_id': m.fromAccountId,
+      if (m.toAccountId != null) 'to_account_id': m.toAccountId,
+      if (iof != null) 'iof_id': iof.movement.id,
+      if (iof != null) 'iof_cents': iof.movement.amountCents,
+    };
   }
 
   Future<void> _review(Map<String, dynamic> row,
@@ -178,62 +209,157 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
     }
   }
 
-  Future<bool> _confirmMany(int count, String what) async =>
+  Future<bool> _confirmMany(int count, String what,
+          {String verb = 'Ignorar',
+          String body =
+              'Nada é lançado nem apagado. Elas saem desta caixa e podem voltar com Desfazer.'}) async =>
       await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-                  title: Text('Ignorar $count $what?'),
-                  content: const Text(
-                      'Nada é lançado nem apagado. Elas saem desta caixa e podem voltar com Desfazer.'),
+                  title: Text('$verb $count $what?'),
+                  content: Text(body),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(c, false),
                         child: const Text('Cancelar')),
                     FilledButton(
                         onPressed: () => Navigator.pop(c, true),
-                        child: const Text('Ignorar')),
+                        child: Text(verb)),
                   ])) ==
       true;
 
+  /// A card bill the bank saw paid: asks only what the banks did not tell.
+  Future<void> _registerInvoice(Match m) async {
+    final app = context.read<AppProvider>();
+    final mv = m.movement;
+    final bank = mv.medium == 'credit' ? m.pair : mv;
+    final card = mv.medium == 'credit' ? mv : m.pair;
+    var from = m.fromAccountId, to = m.toAccountId;
+    final cards = app.accounts.where((a) => a.type == 'credit').toList();
+    final banks = app.accounts
+        .where((a) => a.type != 'credit' && !a.isGold && a.currency == 'BRL')
+        .toList();
+    if (cards.isEmpty || banks.isEmpty) {
+      setState(() => error =
+          'Cadastre o cartão e a conta de onde a fatura é paga em Contas.');
+      return;
+    }
+    to ??= cards.length == 1 ? cards.single.id : null;
+    from ??= app.accountById(to ?? '')?.linkedAccountId;
+    if (from == null || to == null) {
+      final picked = await showDialog<(String, String)>(
+          context: context,
+          builder: (c) {
+            var f = from ?? banks.first.id, t = to ?? cards.first.id;
+            return StatefulBuilder(
+                builder: (c, set) => AlertDialog(
+                        title: const Text('Pagamento da fatura'),
+                        content:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                          DropdownButtonFormField<String>(
+                              initialValue: f,
+                              isExpanded: true,
+                              decoration:
+                                  const InputDecoration(labelText: 'Saiu de'),
+                              items: [
+                                for (final a in banks)
+                                  DropdownMenuItem(
+                                      value: a.id, child: Text(a.name))
+                              ],
+                              onChanged: (v) => set(() => f = v!)),
+                          DropdownButtonFormField<String>(
+                              initialValue: t,
+                              isExpanded: true,
+                              decoration:
+                                  const InputDecoration(labelText: 'Cartão'),
+                              items: [
+                                for (final a in cards)
+                                  DropdownMenuItem(
+                                      value: a.id, child: Text(a.name))
+                              ],
+                              onChanged: (v) => set(() => t = v!)),
+                        ]),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(c),
+                              child: const Text('Cancelar')),
+                          FilledButton(
+                              onPressed: () => Navigator.pop(c, (f, t)),
+                              child: const Text('Registrar')),
+                        ]));
+          });
+      if (picked == null || !mounted) return;
+      (from, to) = picked;
+    }
+    await _act(
+        () =>
+            _writer().addInvoicePayment(bank, card, fromId: from!, cardId: to!),
+        'Pagamento da fatura registrado. Não conta como gasto.');
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!_available)
-      return const AndroidFeatureNotice(
-          title: 'Sugestões',
-          explanation:
-              'A detecção bancária funciona no Android. Esta versão Windows é local e não recebe sugestões do celular.');
     final app = context.watch<AppProvider>();
     final hidden = app.settings.hideBalance;
     String money(int cents) =>
         hidden ? '••••' : formatAmount(cents / 100, 'BRL');
     String when(DateTime d) => DateFormat('dd/MM HH:mm').format(d);
+    String account(String? id) => app.accountById(id ?? '')?.name ?? '—';
     final matches = state?.matches ?? const <Match>[];
+    final ids = {for (final m in matches) m.movement.id};
+    bool waits(PendingMovement? p) => p != null && ids.contains(p.id);
+    // The IOF of a purchase still waiting is reviewed with the purchase.
+    final iofOf = {
+      for (final m in matches)
+        if (m.resolution == Resolution.iof && waits(m.pair)) m.pair!.id: m
+    };
+    final iofAlone = matches
+        .where((m) => m.resolution == Resolution.iof && !waits(m.pair))
+        .toList();
     final maybe =
         matches.where((m) => m.resolution == Resolution.maybe).toList();
-    final own =
-        matches.where((m) => m.resolution == Resolution.ownTransfer).toList();
-    final fresh =
-        matches.where((m) => m.resolution == Resolution.newEntry).toList();
+    // One card per payment: the bank's side when both were seen.
+    final invoices = matches
+        .where((m) =>
+            m.resolution == Resolution.invoicePayment &&
+            (!waits(m.pair) || m.movement.medium != 'credit'))
+        .toList();
+    final ownPairs = matches
+        .where((m) =>
+            m.resolution == Resolution.ownTransfer &&
+            (m.movement.outgoing || !waits(m.pair)))
+        .toList();
+    final ownSingles =
+        matches.where((m) => m.resolution == Resolution.ownName).toList();
+    final fresh = matches
+        .where((m) =>
+            m.resolution == Resolution.newEntry ||
+            m.resolution == Resolution.rule ||
+            m.resolution == Resolution.yieldIncome)
+        .toList();
+    final yields = app.categories
+        .where((c) =>
+            c.type == 'income' &&
+            (c.id == AppInboxWriter.yieldCategoryId ||
+                normalizeMerchant(c.name).startsWith('rendiment')))
+        .firstOrNull;
+    final needs = maybe.length +
+        invoices.length +
+        ownPairs.length +
+        ownSingles.length +
+        iofAlone.length +
+        fresh.length;
     final resolved = state?.resolved ?? const <AutoResolved>[];
-    final rows = {
-      for (final m in matches)
-        m.movement.id: {
-          'id': m.movement.id,
-          'app_id':
-              m.movement.id.startsWith('pluggy:') ? 'pluggy' : 'notification',
-          'amount_cents': m.movement.amountCents,
-          'description': m.movement.description,
-          'kind': m.movement.kind,
-          'medium': 'unknown',
-          'occurred_at': m.movement.occurredAt.millisecondsSinceEpoch,
-        }
-    };
+    final deferred = state?.deferred ?? const <Match>[];
     final cs = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
 
     Widget movementCard(Match m,
         {List<Widget> extra = const [], Widget? hint}) {
       final mv = m.movement;
       final income = !mv.outgoing;
+      final source = mv.bank ??
+          (PluggyInbox.isPluggy(mv.id) ? 'Banco (Open Finance)' : 'Banco');
       return NexoCard(
           padding: const EdgeInsets.all(14),
           child:
@@ -243,7 +369,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                   child: Text(hidden ? 'Movimentação' : mv.description,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontWeight: FontWeight.w600))),
+                      style: const TextStyle(fontWeight: FontWeight.w600))),
               Text('${income ? '+' : '−'}${money(mv.amountCents)}',
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
@@ -252,9 +378,15 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                           : NexoTones.expense(context))),
             ]),
             Text(
-                '${NotificationInbox.knownApps[rows[mv.id]!['app_id']] ?? 'Banco'} · ${when(mv.occurredAt)}',
-                style: Theme.of(context).textTheme.bodySmall),
+                '$source${mv.medium == 'credit' ? ' · cartão' : ''} · ${when(mv.occurredAt)}',
+                style: small),
             if (hint != null) ...[const SizedBox(height: 6), hint],
+            if (m.waiting) ...[
+              const SizedBox(height: 6),
+              Text(
+                  'O outro lado costuma chegar no dia seguinte: se chegar, o app resolve sozinho.',
+                  style: small?.copyWith(color: cs.onSurfaceVariant)),
+            ],
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 4, children: extra),
           ]));
@@ -271,6 +403,16 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                       !await InboxReconciler.automatic());
                   await reload();
                 }
+                if (v == 'yields') {
+                  final income = !await InboxReconciler.yieldsAsIncome();
+                  await InboxReconciler.setYieldsAsIncome(income);
+                  await reload();
+                  if (context.mounted)
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(income
+                            ? 'Rendimentos do banco viram receita "Rendimentos".'
+                            : 'Rendimentos do banco saem da caixa sem lançamento.')));
+                }
                 if (v == 'forget') {
                   await NotificationPreferences.clear();
                   if (context.mounted)
@@ -284,6 +426,9 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                     const PopupMenuItem(
                         value: 'auto',
                         child: Text('Ligar/desligar conciliação automática')),
+                    const PopupMenuItem(
+                        value: 'yields',
+                        child: Text('Rendimentos: lançar ou só ignorar')),
                     const PopupMenuItem(
                         value: 'forget',
                         child: Text('Esquecer contas sugeridas')),
@@ -327,9 +472,13 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                   const LinearProgressIndicator(),
                 if (state != null) ...[
                   Text(
-                      matches.isEmpty
-                          ? 'Tudo em dia. Nada precisa de você agora.'
-                          : '${matches.length} movimentação(ões) precisam de você. O app já resolveu o que era repetitivo.',
+                      needs == 0
+                          ? PluggyInbox.instance == null &&
+                                  resolved.isEmpty &&
+                                  deferred.isEmpty
+                              ? 'Nada para revisar. As movimentações chegam pelo Open Finance, com a sincronização ligada (Mais › Conexões com bancos).'
+                              : 'Tudo em dia. Nada precisa de você agora.'
+                          : '${ptCount(needs, 'movimentação precisa', 'movimentações precisam')} de você. O app já resolveu o que era repetitivo.',
                       style: Theme.of(context).textTheme.bodyMedium),
                   const SizedBox(height: 12),
                 ],
@@ -343,7 +492,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                             title: Text(
                                 '${ptCount(resolved.length, 'resolvida')} automaticamente'),
                             subtitle: const Text(
-                                'Já lançadas, estornos, reservas e rendimentos pequenos'),
+                                'Já lançadas, entre suas contas, estornos, reservas e rendimentos'),
                             trailing: Icon(_showResolved
                                 ? Icons.expand_less
                                 : Icons.expand_more),
@@ -362,16 +511,72 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                                 trailing: r.undoable
                                     ? TextButton(
                                         onPressed: () => _act(
-                                            () => InboxReconciler.undo(r),
-                                            'Voltou para a revisão.'),
+                                            () => InboxReconciler.undo(r,
+                                                writer: _writer()),
+                                            r.created || r.iof != null
+                                                ? 'Desfeito. Voltou para a revisão.'
+                                                : 'Voltou para a revisão.'),
                                         child: const Text('Desfazer'))
                                     : null),
                       ])),
+                if (deferred.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  NexoCard(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Icon(Icons.phone_android, color: cs.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: Text(
+                                      '${ptCount(deferred.length, 'movimentação', 'movimentações')} que o celular lança sozinho',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                            ]),
+                            const SizedBox(height: 4),
+                            Text(
+                                'Rendimentos, transferências entre suas contas, IOF e regras. Só um aparelho lança sozinho, para nada entrar em dobro.',
+                                style: small),
+                            const SizedBox(height: 4),
+                            for (final m in deferred.take(6))
+                              Text(
+                                  '• ${hidden ? 'Movimentação' : m.movement.description} · ${money(m.movement.amountCents)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: small),
+                            if (deferred.length > 6)
+                              Text('… e mais ${deferred.length - 6}',
+                                  style: small),
+                            const SizedBox(height: 6),
+                            TextButton(
+                                onPressed: () => reload(createHere: true),
+                                child:
+                                    const Text('Lançar agora neste aparelho')),
+                          ])),
+                ],
                 if (maybe.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  const NexoSectionTitle('Na dúvida',
+                  NexoSectionTitle('Na dúvida',
                       subtitle: 'Parece um lançamento que você já fez',
-                      icon: Icons.help_outline),
+                      icon: Icons.help_outline,
+                      action: maybe.where((m) => !m.wrongAccount).length > 1
+                          ? 'É o mesmo em todas'
+                          : null, onAction: () async {
+                    final all = maybe.where((m) => !m.wrongAccount).toList();
+                    if (await _confirmMany(all.length, 'movimentações',
+                        verb: 'Vincular',
+                        body:
+                            'Cada movimentação do banco fica ligada ao lançamento parecido que já existe. Nada é lançado de novo.')) {
+                      await _act(() async {
+                        for (final m in all) {
+                          await InboxReconciler.link(
+                              m.movement.id, m.transaction!.id);
+                        }
+                      }, '${all.length} vinculadas. Nada foi lançado de novo.');
+                    }
+                  }),
                   const SizedBox(height: 8),
                   for (final m in maybe)
                     Padding(
@@ -402,46 +607,150 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                                         color: NexoTones.warning(context))),
                             ])),
                 ],
-                if (own.isNotEmpty) ...[
+                if (invoices.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const NexoSectionTitle('Fatura do cartão',
+                      subtitle: 'Pagamento visto no banco; não é gasto',
+                      icon: Icons.credit_score_outlined),
+                  const SizedBox(height: 8),
+                  for (final m in invoices)
+                    Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: movementCard(m,
+                            hint: Text(
+                                m.pair != null
+                                    ? 'O banco e o cartão mostram o mesmo pagamento.'
+                                    : m.movement.medium == 'credit'
+                                        ? 'O cartão recebeu o pagamento.'
+                                        : 'Saiu da conta para pagar o cartão.',
+                                style: small),
+                            extra: [
+                              FilledButton.tonal(
+                                  onPressed: () => _registerInvoice(m),
+                                  child: const Text(
+                                      'Registrar pagamento da fatura')),
+                              TextButton(
+                                  onPressed: () {
+                                    final both = [
+                                      m.movement.id,
+                                      if (waits(m.pair)) m.pair!.id
+                                    ];
+                                    _act(() => InboxReconciler.ignoreAll(both),
+                                        'Ignorado.',
+                                        undo: () => _undoIgnore(both));
+                                  },
+                                  child: const Text('Já está nos saldos')),
+                            ])),
+                ],
+                if (ownPairs.isNotEmpty || ownSingles.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   NexoSectionTitle('Entre suas contas',
                       subtitle: 'Não é gasto nem receita',
                       icon: Icons.swap_horiz,
                       action: 'Ignorar todas', onAction: () async {
-                    final ids = own.map((m) => m.movement.id).toList();
-                    if (await _confirmMany(ids.length, 'movimentações')) {
-                      await _act(() => InboxReconciler.ignoreAll(ids),
-                          '${ids.length} ignoradas.',
-                          undo: () => _undoIgnore(ids));
+                    final all = [
+                      for (final m in [...ownPairs, ...ownSingles]) ...[
+                        m.movement.id,
+                        if (waits(m.pair)) m.pair!.id
+                      ]
+                    ];
+                    if (await _confirmMany(all.length, 'movimentações')) {
+                      await _act(() => InboxReconciler.ignoreAll(all),
+                          '${all.length} ignoradas.',
+                          undo: () => _undoIgnore(all));
                     }
                   }),
                   const SizedBox(height: 8),
-                  for (final m in own.where((m) => m.movement.outgoing))
+                  for (final m in ownPairs)
+                    Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: movementCard(m,
+                            hint: m.pair == null
+                                ? null
+                                : Text(
+                                    'Com: ${hidden ? 'entrada' : m.pair!.description}${m.pair!.bank == null ? '' : ' (${m.pair!.bank})'} · ${when(m.pair!.occurredAt)}'),
+                            extra: [
+                              FilledButton.tonal(
+                                  onPressed: () => _review(
+                                      _row(m,
+                                          pair: waits(m.pair) ? m.pair : null),
+                                      type: 'transfer'),
+                                  child: const Text('Registrar transferência')),
+                              TextButton(
+                                  onPressed: () {
+                                    final both = [
+                                      m.movement.id,
+                                      if (waits(m.pair)) m.pair!.id
+                                    ];
+                                    _act(() => InboxReconciler.ignoreAll(both),
+                                        'Ignoradas.',
+                                        undo: () => _undoIgnore(both));
+                                  },
+                                  child: const Text('Já está nos saldos')),
+                            ])),
+                  for (final m in ownSingles)
                     Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: movementCard(m,
                             hint: Text(
-                                'Com: ${hidden ? 'entrada' : m.pair!.description} · ${when(m.pair!.occurredAt)}'),
+                                m.movement.outgoing
+                                    ? 'Foi para uma conta sua que o Nexo não vê (corretora, outro banco).'
+                                    : 'Veio de uma conta sua que o Nexo não vê.',
+                                style: small),
                             extra: [
                               FilledButton.tonal(
-                                  onPressed: () => _review(rows[m.movement.id]!,
-                                      type: 'transfer'),
+                                  onPressed: () =>
+                                      _review(_row(m), type: 'transfer'),
                                   child: const Text('Registrar transferência')),
                               TextButton(
                                   onPressed: () => _act(
-                                      () => InboxReconciler.ignoreAll(
-                                          [m.movement.id, m.pair!.id]),
-                                      'Ignoradas.',
-                                      undo: () => _undoIgnore(
-                                          [m.movement.id, m.pair!.id])),
+                                      () => NotificationInbox.ignore(
+                                          m.movement.id),
+                                      'Ignorada.',
+                                      undo: () => _undoIgnore([m.movement.id])),
                                   child: const Text('Já está nos saldos')),
                             ])),
-                  if (own.isNotEmpty)
-                    TextButton.icon(
-                        onPressed: _ownerName,
-                        icon: const Icon(Icons.badge_outlined),
-                        label: const Text(
-                            'Informar seu nome para reconhecer melhor')),
+                  TextButton.icon(
+                      onPressed: _ownerName,
+                      icon: const Icon(Icons.badge_outlined),
+                      label: const Text(
+                          'Informar seu nome para reconhecer melhor')),
+                ],
+                if (iofAlone.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const NexoSectionTitle('IOF de compra internacional',
+                      subtitle: 'Cobrado no dia seguinte; faz parte da compra',
+                      icon: Icons.public),
+                  const SizedBox(height: 8),
+                  for (final m in iofAlone)
+                    Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: movementCard(m,
+                            hint: m.transaction == null
+                                ? null
+                                : Text(
+                                    'Compra no Nexo: ${hidden ? 'lançamento' : m.transaction!.description} · ${hidden ? '••••' : formatAmount(m.transaction!.amount, 'BRL')} · ${DateFormat('dd/MM').format(m.transaction!.date)}',
+                                    style: TextStyle(color: cs.primary)),
+                            extra: [
+                              if (m.transaction != null) ...[
+                                FilledButton.tonal(
+                                    onPressed: () => _act(
+                                        () => _writer().addIof(
+                                            m.movement, m.transaction!.id),
+                                        'IOF somado à compra.'),
+                                    child: const Text('Somar à compra')),
+                                TextButton(
+                                    onPressed: () => _act(
+                                        () => InboxReconciler.link(
+                                            m.movement.id, m.transaction!.id),
+                                        'Vinculado. O valor da compra não mudou.'),
+                                    child: const Text('Já está incluído')),
+                              ],
+                              TextButton(
+                                  onPressed: () => _review(_row(m),
+                                      categoryId: m.categoryId),
+                                  child: const Text('Lançar separado')),
+                            ])),
                 ],
                 if (fresh.isNotEmpty) ...[
                   const SizedBox(height: 16),
@@ -449,37 +758,66 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                       subtitle: 'Sem lançamento parecido no Nexo',
                       icon: Icons.fiber_new_outlined,
                       action: 'Ignorar todas', onAction: () async {
-                    final ids = fresh.map((m) => m.movement.id).toList();
-                    if (await _confirmMany(ids.length, 'sugestões')) {
-                      await _act(() => InboxReconciler.ignoreAll(ids),
-                          '${ids.length} ignoradas.',
-                          undo: () => _undoIgnore(ids));
+                    final all = [
+                      for (final m in fresh) ...[
+                        m.movement.id,
+                        if (iofOf[m.movement.id] case final iof?)
+                          iof.movement.id
+                      ]
+                    ];
+                    if (await _confirmMany(all.length, 'sugestões')) {
+                      await _act(() => InboxReconciler.ignoreAll(all),
+                          '${all.length} ignoradas.',
+                          undo: () => _undoIgnore(all));
                     }
                   }),
                   const SizedBox(height: 8),
                   for (final m in fresh)
-                    Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: movementCard(m,
-                            hint: m.categoryId == null
-                                ? null
-                                : Text(
-                                    'Categoria sugerida: ${app.categoryById(m.categoryId!)?.name ?? '—'}',
-                                    style:
-                                        Theme.of(context).textTheme.bodySmall),
-                            extra: [
-                              FilledButton(
-                                  onPressed: () => _review(rows[m.movement.id]!,
-                                      categoryId: m.categoryId),
-                                  child: const Text('Revisar')),
-                              TextButton(
-                                  onPressed: () => _act(
-                                      () => NotificationInbox.ignore(
-                                          m.movement.id),
-                                      'Sugestão ignorada.',
-                                      undo: () => _undoIgnore([m.movement.id])),
-                                  child: const Text('Ignorar')),
-                            ])),
+                    Builder(builder: (context) {
+                      final iof = iofOf[m.movement.id];
+                      final transfer = m.resolution == Resolution.rule &&
+                          (m.fromAccountId != null || m.toAccountId != null);
+                      final isYield = m.resolution == Resolution.yieldIncome;
+                      final category = isYield ? yields?.id : m.categoryId;
+                      final hints = [
+                        if (isYield) 'Parece rendimento do banco.',
+                        if (iof != null)
+                          'Com o IOF de ${money(iof.movement.amountCents)}, cobrado depois: ${money(m.movement.amountCents + iof.movement.amountCents)}',
+                        if (transfer)
+                          'Regra: transferência ${m.movement.outgoing ? 'para ${account(m.toAccountId)}' : 'de ${account(m.fromAccountId)}'}'
+                        else if (category != null)
+                          '${m.resolution == Resolution.rule ? 'Regra' : 'Categoria sugerida'}: ${app.categoryById(category)?.name ?? '—'}',
+                      ];
+                      return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: movementCard(m,
+                              hint: hints.isEmpty
+                                  ? null
+                                  : Text(hints.join('\n'), style: small),
+                              extra: [
+                                FilledButton(
+                                    onPressed: () => _review(_row(m, iof: iof),
+                                        type: transfer
+                                            ? 'transfer'
+                                            : isYield
+                                                ? 'income'
+                                                : null,
+                                        categoryId: category),
+                                    child: const Text('Revisar')),
+                                TextButton(
+                                    onPressed: () {
+                                      final both = [
+                                        m.movement.id,
+                                        if (iof != null) iof.movement.id
+                                      ];
+                                      _act(
+                                          () => InboxReconciler.ignoreAll(both),
+                                          'Sugestão ignorada.',
+                                          undo: () => _undoIgnore(both));
+                                    },
+                                    child: const Text('Ignorar')),
+                              ]));
+                    }),
                 ],
               ]),
         ));
@@ -510,6 +848,9 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
   bool remember = false;
   bool alwaysCategory = false;
 
+  /// "Sempre que for este texto, transferir para esta conta, sem perguntar."
+  bool alwaysTransfer = false;
+
   /// What a rule should look for: the description without card prefixes
   /// and numbers ("Ifd*Wesley 123" → "wesley").
   String get rulePattern {
@@ -524,14 +865,23 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
   late DateTime date;
   String get ruleScope => NotificationPreferences.scope(
       widget.row['app_id'], widget.row['medium'] ?? 'unknown', type);
+  bool get incoming => widget.row['direction'] == 'in';
   List<ImportRule> rules = [];
   @override
   void initState() {
     super.initState();
     type = widget.initialType ??
-        (widget.row['kind'] == 'refund' ? 'income' : widget.row['kind']);
+        switch (widget.row['kind']) {
+          'refund' => 'income',
+          'transfer' => incoming ? 'income' : 'expense',
+          final String kind => kind,
+          _ => 'expense',
+        };
     date = DateTime.fromMillisecondsSinceEpoch(widget.row['occurred_at']);
-    amount.text = ((widget.row['amount_cents'] as int) / 100)
+    // The IOF charged the next day is part of the purchase.
+    amount.text = (((widget.row['amount_cents'] as int) +
+                (widget.row['iof_cents'] as int? ?? 0)) /
+            100)
         .toStringAsFixed(2)
         .replaceAll('.', ',');
     description.text = widget.row['description'];
@@ -544,18 +894,40 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
       rules = await ImportRulesService.load();
       final accounts = await NotificationPreferences.load();
       if (!mounted) return;
-      final rule = ImportRulesService.match(rules, description.text, type,
-          context.read<AppProvider>().categories);
+      final app = context.read<AppProvider>();
+      final rule = ImportRulesService.match(
+          rules, description.text, type, app.categories);
+      // The Nexo account the bank account is linked to, when it can hold
+      // this kind of movement.
+      String? usable(Object? id) {
+        final a = app.accountById(id as String? ?? '');
+        return a == null ||
+                a.isGold ||
+                a.currency != 'BRL' ||
+                (type == 'transfer' && a.type == 'credit')
+            ? null
+            : a.id;
+      }
+
+      final own = usable(widget.row['nexo_account_id']);
+      final other = usable(widget.row['pair_nexo_account_id']);
       setState(() {
         category = rule?.categoryId ??
             widget.suggestedCategory ??
-            CategoryMemory.fromTransactions(
-                    context.read<AppProvider>().transactions)
+            CategoryMemory.fromTransactions(app.transactions)
                 .suggest(description.text, type: type);
         subcategory.text = rule?.subcategory ?? '';
-        account = NotificationPreferences.suggest(
-            accounts, ruleScope, context.read<AppProvider>().accounts,
-            medium: widget.row['medium'] ?? 'unknown', type: type);
+        if (type == 'transfer') {
+          account =
+              usable(widget.row['from_account_id']) ?? (incoming ? other : own);
+          destination =
+              usable(widget.row['to_account_id']) ?? (incoming ? own : other);
+          if (account == destination) destination = null;
+        } else {
+          account = own ??
+              NotificationPreferences.suggest(accounts, ruleScope, app.accounts,
+                  medium: widget.row['medium'] ?? 'unknown', type: type);
+        }
         busy = false;
       });
     } catch (_) {
@@ -595,11 +967,12 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
       busy = true;
       error = null;
     });
+    final id = widget.row['id'] as String;
     final candidates = ImportRulesService.candidates(app.transactions,
-        accountId: account!,
+        accountId: type == 'transfer' && incoming ? destination! : account!,
         date: date,
         amount: value,
-        type: type == 'transfer' ? 'expense' : type);
+        type: type == 'transfer' ? (incoming ? 'income' : 'expense') : type);
     if (candidates.isNotEmpty) {
       final proceed = await showDialog<String>(
           context: context,
@@ -621,8 +994,7 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
       if (!mounted) return;
       if (proceed == 'link') {
         try {
-          await InboxReconciler.link(
-              widget.row['id'] as String, candidates.first.id);
+          await InboxReconciler.link(id, candidates.first.id);
           if (mounted) Navigator.pop(context);
         } catch (_) {
           if (mounted)
@@ -643,19 +1015,24 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
       error = null;
     });
     try {
+      final pair = widget.row['pair_id'] as String?;
       if (type == 'transfer') {
+        // The side that left the account is the debit leg; the other bank's
+        // side of the same money, the credit leg.
         await app.addTransfer(
             fromId: account!,
             toId: destination!,
             fromAmount: value,
             occurredAt: date,
             note: description.text.trim(),
-            suggestionId: widget.row['id']);
+            id: 'notification:$id',
+            suggestionId: incoming ? pair : id,
+            pairSuggestionId: incoming ? id : pair);
       } else {
-        final id = 'notification:${widget.row['id']}';
+        final entryId = 'notification:$id';
         await app.addTransaction(
             AppTransaction(
-                id: id,
+                id: entryId,
                 type: type,
                 amount: value,
                 description: description.text.trim(),
@@ -665,14 +1042,24 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
                 currency: 'BRL',
                 note: widget.row['kind'] == 'refund'
                     ? 'Estorno / reembolso revisado'
-                    : ''),
+                    : widget.row['iof_cents'] != null
+                        ? 'Inclui IOF de R\$ ${((widget.row['iof_cents'] as int) / 100).toStringAsFixed(2).replaceAll('.', ',')}'
+                        : ''),
             metadata: TransactionMetadata(
-                transactionId: id,
+                transactionId: entryId,
                 source: widget.row['kind'] == 'refund' && type == 'income'
                     ? 'notification_refund'
                     : 'notification',
                 subcategory: subcategory.text.trim()),
-            suggestionId: widget.row['id']);
+            suggestionId: id);
+        // The bank's IOF movement is this same entry.
+        if (widget.row['iof_id'] case final String iof) {
+          try {
+            await InboxReconciler.link(iof, entryId);
+          } catch (_) {
+            // It stays in the inbox, where it can be linked or ignored.
+          }
+        }
       }
       // Preferences must never turn a successful financial save into a retry.
       var remembered = true;
@@ -695,11 +1082,26 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
           remembered = false;
         }
       }
+      if (alwaysTransfer && type == 'transfer' && rulePattern.length >= 3) {
+        try {
+          await ImportRulesService.save(ImportRule(
+              id: 'rule:transfer:$rulePattern',
+              pattern: rulePattern,
+              type: 'transfer',
+              categoryId: '',
+              auto: true,
+              // The account the bank does not show: where it went, or
+              // where it came from.
+              targetAccountId: incoming ? account! : destination!));
+        } catch (_) {
+          remembered = false;
+        }
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(remembered
                 ? 'Lançamento registrado.'
-                : 'Lançamento registrado; não foi possível lembrar a conta.')));
+                : 'Lançamento registrado; não foi possível lembrar a escolha.')));
         Navigator.pop(context);
       }
     } catch (_) {
@@ -721,11 +1123,12 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
             a.currency == 'BRL' &&
             (type != 'transfer' || a.type != 'credit'))
         .toList();
+    final iofCents = widget.row['iof_cents'] as int?;
     return Scaffold(
         appBar: AppBar(title: const Text('Revisar sugestão')),
         body: ListView(padding: const EdgeInsets.all(16), children: [
           Text(
-              'Origem: ${NotificationInbox.knownApps[widget.row['app_id']] ?? widget.row['app_id']}'),
+              'Origem: ${widget.row['bank'] ?? NotificationInbox.knownApps[widget.row['app_id']] ?? widget.row['app_id']}'),
           ListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Data da movimentação'),
@@ -745,6 +1148,12 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
                     }),
           const Text(
               'Escolha a conta correta. Pix entre suas próprias contas é transferência, não receita ou despesa.'),
+          if (iofCents != null)
+            Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                    'O valor já inclui o IOF de ${formatAmount(iofCents / 100, 'BRL')}, que o cartão cobrou depois da compra.',
+                    style: Theme.of(context).textTheme.bodySmall)),
           if (type == 'expense')
             Builder(builder: (context) {
               final key = SubscriptionDetector.normalize(description.text);
@@ -807,27 +1216,30 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
               key: ValueKey('account$type$account'),
               initialValue: account,
               isExpanded: true,
-              decoration: const InputDecoration(
-                  labelText: 'Conta / cartão • confira antes de salvar'),
+              decoration: InputDecoration(
+                  labelText: type == 'transfer'
+                      ? 'Saiu de'
+                      : 'Conta / cartão • confira antes de salvar'),
               items: accounts
                   .map(
                       (a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
                   .toList(),
               onChanged: busy ? null : (v) => setState(() => account = v)),
-          CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Lembrar esta escolha'),
-              subtitle: const Text(
-                  'Sugerir esta conta para o mesmo app, meio e tipo. Você sempre confirma.'),
-              value: remember,
-              onChanged:
-                  busy ? null : (v) => setState(() => remember = v ?? false)),
+          if (type != 'transfer')
+            CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Lembrar esta escolha'),
+                subtitle: const Text(
+                    'Sugerir esta conta para o mesmo app, meio e tipo. Você sempre confirma.'),
+                value: remember,
+                onChanged:
+                    busy ? null : (v) => setState(() => remember = v ?? false)),
           if (type == 'transfer')
             DropdownButtonFormField<String>(
+                key: ValueKey('destination$destination'),
                 initialValue: destination,
                 isExpanded: true,
-                decoration:
-                    const InputDecoration(labelText: 'Conta de destino'),
+                decoration: const InputDecoration(labelText: 'Entrou em'),
                 items: accounts
                     .map((a) =>
                         DropdownMenuItem(value: a.id, child: Text(a.name)))
@@ -860,6 +1272,19 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
                 onChanged: busy
                     ? null
                     : (v) => setState(() => alwaysCategory = v ?? false)),
+          if (type == 'transfer' &&
+              widget.row['pair_id'] == null &&
+              rulePattern.length >= 3)
+            CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                    'Sempre registrar "$rulePattern" como transferência entre estas contas'),
+                subtitle: const Text(
+                    'O app lança sozinho das próximas vezes (dá para desfazer). Você pode mudar em Regras.'),
+                value: alwaysTransfer,
+                onChanged: busy
+                    ? null
+                    : (v) => setState(() => alwaysTransfer = v ?? false)),
           const SizedBox(height: 16),
           if (error != null) Text(error!),
           FilledButton(

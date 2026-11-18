@@ -12,7 +12,7 @@ import '../services/notification_inbox.dart' show NotificationInbox;
 
 class DBHelper {
   static Database? _db;
-  static const int _version = 28;
+  static const int _version = 29;
 
   /// Public accessor for the current DB/backup schema version, so UI code
   /// (e.g. the Backup screen) never has to hardcode a copy that can drift
@@ -495,6 +495,7 @@ class DBHelper {
     if (oldV < 23) await _createSuggestions(db);
     if (oldV < 24) await InvestmentRepository.createSchema(db);
     if (oldV < 28) await InvestmentRepository.addCurrency(db);
+    if (oldV < 29) await schema29(db);
     if (oldV < 27) await createSharedSettings(db);
     if (oldV < 26) {
       // Kind of spending of a category (envelopes by share of income).
@@ -804,7 +805,45 @@ class DBHelper {
     await _createSuggestions(db);
     await InvestmentRepository.createSchema(db);
     await createSharedSettings(db);
+    await schema29(db);
     await _insertDefaults(db);
+  }
+
+  /// 1.18: only adds columns. The bank's details of each suggestion (local
+  /// to this device), and synced fields: import rules that register by
+  /// themselves (with a destination account for transfers), the IOF of a
+  /// subscription paid abroad, a bill split with people every month, the
+  /// card's revolving rate and a budget aimed at a subcategory.
+  static Future<void> schema29(DatabaseExecutor db) async {
+    Future<void> add(String table, String column, String type) async {
+      final columns = await db.rawQuery('PRAGMA table_info($table)');
+      if (!columns.any((c) => c['name'] == column)) {
+        await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+      }
+    }
+
+    for (final (column, type) in const [
+      ('direction', 'TEXT'),
+      ('bank_account_id', 'TEXT'),
+      ('nexo_account_id', 'TEXT'),
+      ('bank', 'TEXT'),
+      ('operation_ref', 'TEXT'),
+      ('payment_ref', 'TEXT'),
+      ('same_owner', 'INTEGER'),
+      ('counterparty', 'TEXT'),
+      // The decision the server last heard from this device, so only what
+      // changed here is sent; and "the person undid the app's decision".
+      ('sent_status', 'TEXT'),
+      ('manual', 'INTEGER'),
+    ]) {
+      await add('notification_suggestions', column, type);
+    }
+    await add('import_rules', 'auto', 'INTEGER NOT NULL DEFAULT 0');
+    await add('import_rules', 'target_account_id', 'TEXT');
+    await add('recurring_payments', 'iof_percent', 'REAL');
+    await add('recurring_payments', 'split_json', 'TEXT');
+    await add('accounts', 'interest_monthly_percent', 'REAL');
+    await add('budgets', 'subcategory', "TEXT NOT NULL DEFAULT ''");
   }
 
   static Future<void> _insertDefaults(Database db) async {
