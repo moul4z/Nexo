@@ -37,6 +37,14 @@ String _moneyIn(BuildContext context, int cents, String currency) =>
         : formatAmount(cents / 100, currency);
 String _quantity(int units) =>
     NumberFormat('0.######', 'pt_BR').format(units / investmentScale);
+
+/// What a quote round could not update: the first problem, and how many
+/// more. Null when everything was read.
+String? quoteProblems(List<String> problems) => problems.isEmpty
+    ? null
+    : problems.length == 1
+        ? problems.first
+        : '${problems.first} E mais ${problems.length - 1} sem cotação.';
 const _trackingNotice =
     'Aportes e resgates vinculados movimentam o saldo da conta, sem contar como consumo. Proventos vinculados entram como receita. Posições antigas continuam sem movimentar contas até sua revisão.';
 
@@ -131,13 +139,14 @@ class _InvestmentsScreenState extends State<InvestmentsScreen> {
       }
       final token = await InvestmentQuoteSettings.token();
       var updated = 0;
-      String? failure;
+      // Every asset is tried: what failed is told at the end.
+      final problems = <String>[];
       if (foreign.isNotEmpty) {
         final source = SupabaseForeignQuotes.instance;
         final fx = mounted ? context.read<AppProvider>().fxMicros('USD') : null;
         if (source == null) {
-          failure =
-              'Cotação dos EUA precisa da sua conta em Sincronizar dispositivos.';
+          problems.add(
+              'Cotação dos EUA precisa da sua conta em Sincronizar dispositivos.');
         } else {
           try {
             final tickers = foreign.map((p) => p.investment.ticker).toSet();
@@ -152,11 +161,11 @@ class _InvestmentsScreenState extends State<InvestmentsScreen> {
             updated += got.length;
             final missing = tickers.difference(got.keys.toSet());
             if (missing.isNotEmpty) {
-              failure =
-                  'Sem cotação para ${missing.join(', ')}. Confira o código ou informe o preço.';
+              problems.add(
+                  'Sem cotação para ${missing.join(', ')}. Confira o código ou informe o preço.');
             }
           } on QuoteFailure catch (e) {
-            failure = e.message;
+            problems.add(e.message);
           }
         }
       }
@@ -179,13 +188,13 @@ class _InvestmentsScreenState extends State<InvestmentsScreen> {
           }
           updated++;
         } on QuoteFailure catch (e) {
-          failure = e.message;
-          break;
+          // One asset without a quote never stops the others.
+          problems.add('$ticker: ${e.message}');
         }
       }
       if (mounted)
         setState(() => _quoteStatus =
-            '$updated código(s) consultado(s). ${failure ?? (tickers.length > 20 ? 'Limite de 20 códigos por rodada.' : 'Confira a data de cada preço; cotações podem ter atraso.')}');
+            '$updated código(s) consultado(s). ${quoteProblems(problems) ?? (tickers.length > 20 ? 'Limite de 20 códigos por rodada.' : 'Confira a data de cada preço; cotações podem ter atraso.')}');
     } catch (_) {
       if (mounted)
         setState(() => _quoteStatus =

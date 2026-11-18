@@ -230,13 +230,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     final cardName = _cardNameCtrl.text.trim();
     if (cardName.isNotEmpty) {
+      final owed = parseMoney(_cardBalCtrl.text) ?? 0;
+      final limit = parseMoney(_cardLimitCtrl.text);
       await app.addAccount(Account(
         id: app.newId(),
         name: cardName,
         type: _cardType,
         currency: _cardCur,
-        balance: parseMoney(_cardBalCtrl.text) ?? 0,
-        creditLimit: parseMoney(_cardLimitCtrl.text) ?? 0,
+        // What a credit card owes is a negative balance, as in the
+        // accounts screen; a card without a limit typed has none.
+        balance: _cardType == 'credit' && owed != 0 ? -owed : owed,
+        creditLimit:
+            _cardType == 'credit' && limit != null && limit > 0 ? limit : null,
         colorValue: _cardColor,
         linkedAccountId: bankAccId,
       ));

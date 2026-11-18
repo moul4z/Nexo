@@ -39,6 +39,14 @@ void main() {
         FinanceRules.isNeutral(tx('Transferência enviada', ''), null), isTrue);
     expect(FinanceRules.isNeutral(tx('Pagamento de fatura', ''), null), isTrue);
   });
+  test('deleting a category in use says what is left without one', () {
+    expect(
+        categoryInUseWarning((entries: 0, recurring: 0, budgets: 0)), isNull);
+    expect(categoryInUseWarning((entries: 1, recurring: 0, budgets: 0)),
+        startsWith('1 lançamento usa esta categoria e fica sem categoria.'));
+    expect(categoryInUseWarning((entries: 12, recurring: 2, budgets: 1)),
+        startsWith('12 lançamentos, 2 recorrentes e 1 orçamento usam'));
+  });
   test('an exchange rate or a quote keeps its extra decimal places', () {
     // The form suggests the rate with four places; money input refused it.
     expect(parseMoney('5,4321'), isNull);

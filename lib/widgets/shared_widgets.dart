@@ -281,7 +281,8 @@ class LinearProgressCard extends StatelessWidget {
 }
 
 // ── Delete confirm ────────────────────────────────────────────────────────────
-Future<bool> showDeleteConfirm(BuildContext context, String name) async {
+Future<bool> showDeleteConfirm(BuildContext context, String name,
+    {String? warning}) async {
   AppHaptics.tap(context, HapticStrength.medium);
   final l10n = AppLocalizations.of(context)!;
 
@@ -289,7 +290,9 @@ Future<bool> showDeleteConfirm(BuildContext context, String name) async {
     context: context,
     builder: (ctx) => AlertDialog(
       title: Text(l10n.shared_widgets_delete),
-      content: Text(l10n.shared_widgets_deleteConfirm(name)),
+      content: Text(warning == null
+          ? l10n.shared_widgets_deleteConfirm(name)
+          : '${l10n.shared_widgets_deleteConfirm(name)}\n\n$warning'),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -324,7 +327,9 @@ class AccountCardPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final filtered = accounts.where((a) => a.type != 'bank').toList();
+    // Each screen passes the accounts that make sense for it. "Banco" is
+    // the default type: leaving it out hid the main account.
+    final filtered = accounts;
     final items = allowNone
         ? [null, ...filtered.map((a) => a as Account?)]
         : filtered.map((a) => a as Account?).toList();

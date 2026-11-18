@@ -62,7 +62,20 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
 
   /// [createHere]: the person asked this device to register what the phone
   /// would register by itself.
-  Future<void> reload({bool force = false, bool createHere = false}) async {
+  Future<void> _queue = Future.value();
+  bool _acting = false;
+
+  /// One at a time: a second request (a pull to refresh during the first
+  /// read, an action that ends while another reload runs) waits its turn,
+  /// so the reconciler never runs twice over the same suggestions.
+  Future<void> reload({bool force = false, bool createHere = false}) {
+    final run =
+        _queue.then((_) => _reload(force: force, createHere: createHere));
+    _queue = run.catchError((Object _) {});
+    return run;
+  }
+
+  Future<void> _reload({bool force = false, bool createHere = false}) async {
     try {
       String? syncError;
       String? freshness;
@@ -109,6 +122,9 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
 
   Future<void> _act(Future<void> Function() action, String done,
       {Future<void> Function()? undo}) async {
+    // A second tap while the first is being written does nothing.
+    if (_acting) return;
+    _acting = true;
     try {
       await action();
       await reload();
@@ -133,6 +149,8 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
       if (mounted)
         setState(() => error =
             'Não foi possível concluir. A sugestão pode já ter sido resolvida.');
+    } finally {
+      _acting = false;
     }
   }
 

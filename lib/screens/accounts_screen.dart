@@ -46,7 +46,8 @@ class AccountsScreen extends StatelessWidget {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          automaticallyImplyLeading: false,
+          // A tab has no way back; opened from another screen it does.
+          automaticallyImplyLeading: Navigator.canPop(context),
           title: Text('Contas e cartões',
               style: TextStyle(fontWeight: FontWeight.w600)),
           actions: [

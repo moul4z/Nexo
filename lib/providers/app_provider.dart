@@ -850,6 +850,14 @@ class AppProvider extends ChangeNotifier {
     return _erService.convert(amount, from, to, exchangeRates);
   }
 
+  /// [convertBetween] for money that is about to be written. Without the
+  /// rate there is no amount: writing the same number in another currency
+  /// would create or destroy money.
+  double _converted(double amount, String from, String to) =>
+      convertBetween(amount, from, to) ??
+      (throw StateError(
+          'Sem a cotação de $from para $to agora. Informe o valor que chegou na outra moeda.'));
+
   bool canShowConverted(Account account) =>
       ratesLoaded &&
       exchangeRates.isNotEmpty &&
@@ -997,6 +1005,14 @@ class AppProvider extends ChangeNotifier {
     categories = await DBHelper.getCategories();
     notifyListeners();
   }
+
+  /// How many entries, recurring items and budgets use a category: deleting
+  /// it leaves them without one.
+  ({int entries, int recurring, int budgets}) categoryUses(String id) => (
+        entries: transactions.where((t) => t.categoryId == id).length,
+        recurring: recurring.where((r) => r.categoryId == id).length,
+        budgets: budgets.where((b) => b.categoryId == id).length,
+      );
 
   Future<void> deleteCategory(String id) async {
     await DBHelper.deleteCategory(id);
@@ -1653,8 +1669,7 @@ class AppProvider extends ChangeNotifier {
     } else if (fromCurrency == toCurrency) {
       creditAmount = fromAmount;
     } else {
-      creditAmount =
-          convertBetween(fromAmount, fromCurrency, toCurrency) ?? fromAmount;
+      creditAmount = _converted(fromAmount, fromCurrency, toCurrency);
     }
 
     final now = occurredAt ?? DateTime.now();
@@ -2462,15 +2477,17 @@ class AppProvider extends ChangeNotifier {
       if (rows.isEmpty) throw StateError('Objetivo não encontrado.');
       final goal = SavingsGoal.fromMap(rows.first);
       final goalAmount = deposit
-          ? convertBetween(amount, account.currency, goal.currency) ?? amount
+          ? _converted(amount, account.currency, goal.currency)
           : amount;
       final accountAmount = deposit
           ? amount
-          : convertBetween(amount, goal.currency, account.currency) ?? amount;
-      if (!deposit && goalAmount > goal.currentAmount)
+          : _converted(amount, goal.currency, account.currency);
+      // To the cent: what was saved in several deposits is a sum of
+      // doubles, and taking all of it out must not be refused.
+      if (!deposit && goalAmount > goal.currentAmount + .005)
         throw StateError('O valor supera o saldo guardado.');
-      final newAmount =
-          goal.currentAmount + (deposit ? goalAmount : -goalAmount);
+      final moved = goal.currentAmount + (deposit ? goalAmount : -goalAmount);
+      final newAmount = moved.abs() < .005 ? 0.0 : moved;
       final completed = newAmount >= goal.targetAmount;
       await txn.insert(
           'savings_contributions',

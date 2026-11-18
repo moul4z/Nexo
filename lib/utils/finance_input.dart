@@ -53,3 +53,20 @@ String ptMonthYear(DateTime date) {
   if (value.isEmpty) return value;
   return '${value[0].toUpperCase()}${value.substring(1)}';
 }
+
+/// What deleting a category in use leaves behind, told before confirming.
+/// Null when nothing uses it.
+String? categoryInUseWarning(({int entries, int recurring, int budgets}) uses) {
+  final parts = [
+    if (uses.entries > 0) ptCount(uses.entries, 'lançamento'),
+    if (uses.recurring > 0)
+      ptCount(uses.recurring, 'recorrente', 'recorrentes'),
+    if (uses.budgets > 0) ptCount(uses.budgets, 'orçamento'),
+  ];
+  if (parts.isEmpty) return null;
+  final list = parts.length == 1
+      ? parts.single
+      : '${parts.sublist(0, parts.length - 1).join(', ')} e ${parts.last}';
+  final many = uses.entries + uses.recurring + uses.budgets > 1;
+  return '$list ${many ? 'usam' : 'usa'} esta categoria e ${many ? 'ficam' : 'fica'} sem categoria. Para manter o histórico junto, troque a categoria deles antes de excluir.';
+}

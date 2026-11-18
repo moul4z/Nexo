@@ -8,6 +8,7 @@ import '../services/envelopes.dart';
 import '../models/models.dart';
 import '../widgets/shared_widgets.dart';
 import '../utils/haptics.dart';
+import '../utils/finance_input.dart';
 import '../theme/nexo_tokens.dart';
 
 class CategoriesScreen extends StatelessWidget {
@@ -117,7 +118,9 @@ class _CatTile extends StatelessWidget {
               icon:
                   Icon(Icons.delete_outline_rounded, size: 18, color: cs.error),
               onPressed: () async {
-                if (!await showDeleteConfirm(context, cat.name) ||
+                final uses = context.read<AppProvider>().categoryUses(cat.id);
+                if (!await showDeleteConfirm(context, cat.name,
+                        warning: categoryInUseWarning(uses)) ||
                     !context.mounted) {
                   return;
                 }

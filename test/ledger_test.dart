@@ -737,6 +737,50 @@ void main() {
         throwsStateError);
     expect(app.accountById('bank')!.balance, 850);
   });
+  test('Everything saved in cents can be taken out, to the cent', () async {
+    // Three deposits of 0.10 add up to 0.30000000000000004: taking 0.30
+    // out was refused by a fraction of a cent (audit FIN-09).
+    await app.addSavingsGoal(SavingsGoal(
+        id: 'c',
+        name: 'Centavos',
+        targetAmount: 1000,
+        currency: 'BRL',
+        colorValue: 0));
+    for (var i = 0; i < 3; i++) {
+      await app.contributeToGoal(
+          goalId: 'c', fromAccountId: 'bank', amount: .1);
+    }
+    await app.withdrawFromGoal(goalId: 'c', toAccountId: 'bank', amount: .3);
+    expect(app.savingsGoals.single.currentAmount, 0);
+    expect(app.accountById('bank')!.balance, closeTo(1000, 1e-9));
+    await expectLater(
+        app.withdrawFromGoal(goalId: 'c', toAccountId: 'bank', amount: .01),
+        throwsStateError);
+  });
+  test('A transfer between currencies without a rate is refused, not 1:1',
+      () async {
+    // Without the rate the same number used to arrive in the other
+    // currency: 100 dollars became 100 reais (audit FIN-04).
+    await app.addAccount(Account(
+        id: 'usd',
+        name: 'Conta em dólar fictícia',
+        type: 'bank',
+        currency: 'USD',
+        balance: 100,
+        colorValue: 0));
+    app.exchangeRates = {};
+    await expectLater(
+        app.addTransfer(fromId: 'usd', toId: 'bank', fromAmount: 100),
+        throwsStateError);
+    expect(app.accountById('usd')!.balance, 100);
+    expect(app.accountById('bank')!.balance, 1000);
+    expect(app.transactions, isEmpty);
+    // With the amount that arrived, it goes through.
+    await app.addTransfer(
+        fromId: 'usd', toId: 'bank', fromAmount: 100, toAmount: 540);
+    expect(app.accountById('usd')!.balance, 0);
+    expect(app.accountById('bank')!.balance, 1540);
+  });
   test('Opening card debt is payable but does not count as new spending',
       () async {
     final now = DateTime.now();
