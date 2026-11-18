@@ -258,6 +258,76 @@ void main() {
     expect(await balance('bank'), 880);
   });
 
+  test('a rejection followed by a network failure never stalls the queue',
+      () async {
+    // The server refuses an edit and the pull that would explain it fails.
+    // What the device writes next must wait behind the refused edit: sent
+    // ahead of it, its own receipt arrived "out of order" and every later
+    // sync failed (audit SYNC-01).
+    await converged();
+    AppTransaction amount(AppTransaction t, double value) => AppTransaction(
+        id: t.id,
+        type: t.type,
+        amount: value,
+        description: t.description,
+        accountId: t.accountId,
+        categoryId: t.categoryId,
+        date: t.date);
+    await use('phone');
+    final phoneApp = await provider();
+    final shared = phoneApp.transactions.single;
+    await phoneApp.updateTransaction(amount(shared, 120), shared);
+    await sync('phone');
+
+    await use('pc');
+    final pcApp = await provider();
+    await pcApp.updateTransaction(
+        amount(pcApp.transactions.single, 90), pcApp.transactions.single);
+    network.failNextPull = true;
+    expect(await sync('pc'), LedgerSyncStatus.retryLater);
+    await (await provider()).addTransaction(tx('later', 10));
+
+    expect(await sync('pc'), LedgerSyncStatus.conflict);
+    final engine = LedgerSync(await DBHelper.database, network);
+    expect(
+        (await engine.conflicts()).single.operation.kind, 'transaction.update');
+    await engine.discard((await engine.conflicts()).single.operation.id);
+    await converged();
+    expect(await balance('bank'), 870, reason: '1000 - 120 - 10');
+    expect((await DBHelper.getTransactions()).map((t) => t.id).toSet(),
+        {'shared', 'later'});
+  });
+
+  test('an edit that carries a balance never overwrites the money', () async {
+    // Balances travel as deltas. A received edit of the account with a
+    // "balance" field (a faulty or forged operation) changes the name only.
+    await converged();
+    final db = await use('pc');
+    final before = await balance('bank');
+    final row = (await db.query('accounts', where: "id = 'bank'")).single;
+    await ledgerTransaction(db, 'sync.pull', (txn) async {
+      await LedgerCapture.writeRow(txn, 'accounts', 'bank',
+          {...row, 'name': 'Banco renomeado', 'balance': 123456.0});
+    }, scope: LedgerScope.remote);
+    final after =
+        (await DBHelper.getAccounts()).firstWhere((a) => a.id == 'bank');
+    expect(after.name, 'Banco renomeado');
+    expect(after.balance, before);
+  });
+
+  test('a pass that stops at its page limit says it has not caught up',
+      () async {
+    // What runs after a sync (the assistant's queue, the bank inbox) waits
+    // for this flag: on a device far behind it would otherwise work over
+    // old data (audit SYNC-03).
+    await sync('phone');
+    final engine = LedgerSync(await use('pc'), network);
+    expect(await engine.synchronize(maxPages: 1), LedgerSyncStatus.progressed);
+    expect(engine.caughtUp, isFalse, reason: 'no empty page was seen yet');
+    expect(await engine.synchronize(), LedgerSyncStatus.idle);
+    expect(engine.caughtUp, isTrue);
+  });
+
   test('an effect-free conflict can keep the local alternative', () async {
     await converged();
     AppCategory food(String name) =>

@@ -148,6 +148,37 @@ void main() {
     expect(queue.finished['r1']!.$1, 'done');
   });
 
+  test('a transfer applied by another device is one transfer, not two',
+      () async {
+    // The first device applied the request and could not tell the server;
+    // five minutes later the server offers it to the second device, which
+    // has received the transfer by sync but has no memory of the request
+    // (audit SYNC-02).
+    final args = {
+      'from_account_id': 'bank',
+      'to_account_id': 'card',
+      'amount_cents': 30000,
+      'date': '2026-10-20',
+      'note': 'reserva',
+    };
+    queue.add('t2', 'transfer.add', args);
+    await run();
+    final bank = await balance('bank'), card = await balance('card');
+    SharedPreferences.setMockInitialValues({}); // another device's memory
+    final second = AssistantCommands(queue, app);
+    queue.add('t2', 'transfer.add', args);
+    await second.run(datasetId: 'd', deviceId: 'other-device');
+    expect(queue.finished['t2']!.$1, 'done');
+    expect(queue.finished['t2']!.$2['message'], contains('já estava'));
+    expect(await balance('bank'), bank);
+    expect(await balance('card'), card);
+    expect(
+        (await DBHelper.getTransactions())
+            .where((t) => t.id.startsWith('assistant:t2')),
+        hasLength(2),
+        reason: 'the two legs, once');
+  });
+
   test('transfer keeps the total; correction and deletion adjust balance',
       () async {
     queue.add('t', 'transfer.add', {
@@ -356,6 +387,19 @@ void main() {
         .length;
     expect(card, 1, reason: 'paying the invoice is not a new expense');
     expect(spentBefore, greaterThan(0));
+
+    // Offered to another device that already received the payment.
+    SharedPreferences.setMockInitialValues({});
+    final second = AssistantCommands(queue, app);
+    queue.add('f', 'invoice.pay', {
+      'card_id': 'cc',
+      'from_account_id': 'bank',
+      'invoice': 'current',
+      'amount_cents': 5000,
+    });
+    await second.run(datasetId: 'd', deviceId: 'other-device');
+    expect(queue.finished['f']!.$2['message'], contains('já estava'));
+    expect(await balance('bank'), 650, reason: 'paid once');
   });
 
   group('everything else the app does', () {

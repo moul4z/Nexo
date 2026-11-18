@@ -314,9 +314,15 @@ class LedgerSync {
     );
   }
 
+  /// Whether the last [synchronize] received everything the server had.
+  /// False when it stopped at its page limit with more to come: the data
+  /// on this device is then still behind the other devices.
+  bool caughtUp = false;
+
   Future<LedgerSyncStatus> synchronize({int maxPages = 20}) async {
     if (_running) return LedgerSyncStatus.busy;
     _running = true;
+    caughtUp = false;
     try {
       final binding = await _binding(db);
       if (await LedgerCapture.restoreBarrier(db))
@@ -333,7 +339,10 @@ class LedgerSync {
         progressed |= pushed ?? false;
         for (var page = 0; page < maxPages; page++) {
           final received = await _pull(binding);
-          if (received == 0) break;
+          if (received == 0) {
+            caughtUp = true;
+            break;
+          }
           progressed = true;
         }
         if (await _settleRejected()) progressed = true;
@@ -364,8 +373,12 @@ class LedgerSync {
   Future<bool?> _push(Map<String, Object?> binding) async {
     var progressed = false;
     final rows = await db.query('sync_journal',
-        where: "state = 'pending' AND rejected = 0", orderBy: 'position');
+        where: "state = 'pending'", orderBy: 'position');
     for (final row in rows) {
+      // A refused operation waits for the pull that explains it (it may
+      // have failed last time). Nothing is sent ahead of it: the server
+      // would accept later work whose receipt then arrives out of order.
+      if (row['rejected'] == 1) break;
       if ((row['next_retry_at'] as int) > _now().millisecondsSinceEpoch) {
         return progressed ? true : null;
       }

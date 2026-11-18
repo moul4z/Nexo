@@ -714,7 +714,10 @@ class AssistantParityCommands {
     if (kind == 'suggestion.transfer') {
       final from = _account(a['from_account_id']);
       final to = _account(a['to_account_id']);
+      // The id the screen uses for the same suggestion: registered twice
+      // (two devices, the screen and the assistant), it is one transfer.
       await app.addTransfer(
+          id: 'notification:$sid',
           fromId: from.id,
           toId: to.id,
           fromAmount: amount,

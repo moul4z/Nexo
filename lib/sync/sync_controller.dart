@@ -200,6 +200,19 @@ class SyncController extends ChangeNotifier with WidgetsBindingObserver {
       final engine = LedgerSync(db, remote(binding['device_id'] as String));
       final before = await engine.cursor;
       status = await engine.synchronize();
+      // A device far behind receives in rounds. What runs after a sync (the
+      // assistant's queue, the bank inbox) must see the other devices' work
+      // first, so it waits until everything has arrived.
+      for (var round = 0;
+          round < 5 &&
+              !engine.caughtUp &&
+              status == LedgerSyncStatus.progressed;
+          round++) {
+        status = await engine.synchronize();
+      }
+      final behind = !engine.caughtUp &&
+          (status == LedgerSyncStatus.idle ||
+              status == LedgerSyncStatus.progressed);
       if (await engine.cursor != before) await reload();
       pending = await engine.pendingCount;
       conflicts = await engine.conflicts();
@@ -208,8 +221,9 @@ class SyncController extends ChangeNotifier with WidgetsBindingObserver {
           status == LedgerSyncStatus.conflict) {
         lastSuccess = _now();
       }
-      if (status == LedgerSyncStatus.idle ||
-          status == LedgerSyncStatus.progressed) {
+      if (!behind &&
+          (status == LedgerSyncStatus.idle ||
+              status == LedgerSyncStatus.progressed)) {
         try {
           await afterSync?.call();
         } catch (e) {

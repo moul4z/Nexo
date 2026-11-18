@@ -437,7 +437,14 @@ class AssistantCommands {
       case 'transfer.add':
         final from = _account(a['from_account_id']);
         final to = _account(a['to_account_id']);
+        // The same request applied by a second device (the first one did
+        // it and could not tell the server) is one transfer, not two.
+        final transferId = 'assistant:${c.id}';
+        if (await _transaction(transferId) != null) {
+          return {'message': 'Esta transferência já estava lançada.'};
+        }
         await app.addTransfer(
+            id: transferId,
             fromId: from.id,
             toId: to.id,
             fromAmount: _reais(a['amount_cents']),
@@ -624,7 +631,7 @@ class AssistantCommands {
           'message': deposit ? 'Guardado no objetivo.' : 'Retirado do objetivo.'
         };
       case 'invoice.pay':
-        return _payInvoice(a);
+        return _payInvoice(a, 'assistant:${c.id}');
       case 'request.undo':
         return _undo(a['request_id'] as String?,
             (a['undo'] as Map?)?.cast<String, Object?>());
@@ -716,10 +723,15 @@ class AssistantCommands {
 
   /// The invoice of the card, like the "Pagar fatura" button: a transfer
   /// tied to the cycle, never a new expense.
-  Future<Map<String, Object?>> _payInvoice(Map<String, dynamic> a) async {
+  Future<Map<String, Object?>> _payInvoice(
+      Map<String, dynamic> a, String paymentId) async {
     final card = _account(a['card_id']);
     final from = _account(a['from_account_id']);
     if (card.type != 'credit') throw StateError('Não é um cartão de crédito.');
+    // Applied already by another device: one payment, not two.
+    if (await _transaction(paymentId) != null) {
+      return {'message': 'Este pagamento de fatura já estava lançado.'};
+    }
     // The invoice is the one open or closed on the day it was paid.
     final paidOn =
         a['date'] == null ? DateTime.now() : _day(a['date'] as String?);
@@ -752,6 +764,7 @@ class AssistantCommands {
       throw StateError('Conta e cartão em moedas diferentes: pague pelo app.');
     }
     await app.addTransfer(
+        id: paymentId,
         fromId: from.id,
         toId: card.id,
         fromAmount: amount,

@@ -70,7 +70,10 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
       if (pluggy == null) return;
       final prefs = await SharedPreferences.getInstance();
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - (prefs.getInt(_bankPassKey) ?? 0) < 3600000) return;
+      // Once an hour. A clock set back must not block it: a mark in the
+      // future counts as no mark.
+      final last = prefs.getInt(_bankPassKey) ?? 0;
+      if (last <= now && now - last < 3600000) return;
       await prefs.setInt(_bankPassKey, now);
       await pluggy.sync();
     }

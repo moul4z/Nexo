@@ -422,7 +422,10 @@ abstract final class LedgerCapture {
             columns: [column], where: '$column = ?', whereArgs: [key]))
         .isNotEmpty;
     if (exists) {
-      await txn.update(table, value, where: '$column = ?', whereArgs: [key]);
+      // A balance only moves as an effect, never as a value: one that came
+      // in an edit (a faulty or forged operation) is not written.
+      await txn.update(table, LedgerCapture.value(table, value),
+          where: '$column = ?', whereArgs: [key]);
     } else {
       // Account balances only ever arrive as effects.
       await txn.insert(
