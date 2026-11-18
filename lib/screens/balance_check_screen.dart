@@ -10,6 +10,7 @@ import '../services/pluggy_inbox.dart';
 import '../widgets/analysis_widgets.dart';
 import '../widgets/nexo_ui.dart';
 import '../utils/finance_input.dart';
+import 'account_reconcile_screen.dart';
 
 /// "Conferir com o banco": each Open Finance account against the Nexo
 /// account it is linked to, at the moment the bank was read. A difference
@@ -259,7 +260,11 @@ class _BankCard extends StatelessWidget {
           )
         else
           _CheckView(
-              linked: linked, check: check, money: money, onAdjust: onAdjust),
+              linked: linked,
+              check: check,
+              until: bank.bankUpdatedAt,
+              money: money,
+              onAdjust: onAdjust),
       ]),
     );
   }
@@ -271,9 +276,13 @@ class _CheckView extends StatelessWidget {
       {required this.linked,
       required this.check,
       required this.money,
-      required this.onAdjust});
+      required this.onAdjust,
+      this.until});
   final Account? linked;
   final BalanceCheck? check;
+
+  /// When the bank was read.
+  final DateTime? until;
   final String Function(double) money;
   final void Function(Account, BalanceCheck) onAdjust;
 
@@ -312,10 +321,21 @@ class _CheckView extends StatelessWidget {
                 fontWeight: FontWeight.w600,
                 color: NexoTones.warning(context))),
         const SizedBox(height: 6),
-        FilledButton.tonalIcon(
-            onPressed: () => onAdjust(linked, check),
-            icon: const Icon(Icons.tune),
-            label: const Text('Ajustar o Nexo (neutro)')),
+        // Understand first, adjust after.
+        Wrap(spacing: 8, runSpacing: 4, children: [
+          FilledButton.tonalIcon(
+              onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => AccountReconcileScreen(
+                          account: linked, check: check, until: until))),
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('Ver o que explica')),
+          TextButton.icon(
+              onPressed: () => onAdjust(linked, check),
+              icon: const Icon(Icons.tune),
+              label: const Text('Ajustar o Nexo (neutro)')),
+        ]),
       ],
     ]);
   }
@@ -372,7 +392,11 @@ class _GroupCard extends StatelessWidget {
               'Conta a partir da leitura mais antiga: ${when.format(combined!.bankUpdatedAt!)}',
               style: small),
         _CheckView(
-            linked: account, check: check, money: money, onAdjust: onAdjust),
+            linked: account,
+            check: check,
+            until: combined?.bankUpdatedAt,
+            money: money,
+            onAdjust: onAdjust),
       ]),
     );
   }

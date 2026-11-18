@@ -6,6 +6,7 @@ import '../database/db_helper.dart';
 import '../models/models.dart';
 import '../models/transaction_metadata.dart';
 import '../sync/sync_controller.dart';
+import 'account_reconciliation.dart';
 import 'diagnostics.dart';
 import 'import_rules_service.dart';
 import 'notification_inbox.dart';
@@ -255,6 +256,51 @@ class InboxReconciler {
               auto: r.auto,
               targetAccountId: r.targetAccountId)
       ];
+
+  /// "Conferir com o banco", item by item: one account against the bank
+  /// movements of a period, with the same reading as the inbox. Reads only.
+  static Future<AccountReconciliation> account({
+    required String accountId,
+    required DateTime from,
+    required DateTime to,
+    required List<AppTransaction> transactions,
+    required Map<String, TransactionMetadata> metadata,
+    required List<Account> accounts,
+    String profileName = '',
+    DateTime? now,
+  }) async {
+    final db = await DBHelper.database;
+    // A few days around: the other side of a pair, or the entry of a
+    // movement, rarely falls on the same day.
+    const around = Duration(days: 5);
+    final rows = await db.query('notification_suggestions',
+        where: 'occurred_at >= ? AND occurred_at < ?',
+        whereArgs: [
+          DateTime(from.year, from.month, from.day)
+              .subtract(around)
+              .millisecondsSinceEpoch,
+          DateTime(to.year, to.month, to.day + 1)
+              .add(around)
+              .millisecondsSinceEpoch
+        ]);
+    final answered = await db.query('notification_suggestions',
+        columns: ['transaction_id'], where: 'transaction_id IS NOT NULL');
+    return reconcileAccount(
+        accountId: accountId,
+        rows: rows,
+        transactions: transactions,
+        metadata: metadata,
+        accounts: accounts,
+        from: from,
+        to: to,
+        ownerNames: await _owners(profileName),
+        rules: _rules(await ImportRulesService.load()),
+        dismissedPairs: await _set(_dismissedKey),
+        alreadyAnswered: {
+          for (final r in answered) r['transaction_id'] as String
+        },
+        now: now);
+  }
 
   /// Reconciles the pending suggestions and applies the automatic outcomes.
   static Future<InboxState> run({
