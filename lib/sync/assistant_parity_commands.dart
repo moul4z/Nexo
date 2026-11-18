@@ -609,14 +609,31 @@ class AssistantParityCommands {
       // ── Automatic category rules and Open Finance ───────────────────────
       case 'rule.save':
         final id = a['id'] as String? ?? 'assistant-rule:$commandId';
-        final c = _category(a['category_id']);
-        await ImportRulesService.save(ImportRule(
-            id: id,
-            pattern: a['pattern'] as String,
-            type: a['type'] as String? ?? c.type,
-            categoryId: c.id,
-            subcategory: a['subcategory'] as String? ?? ''));
-        return {'rule_id': id, 'message': 'Regra salva.'};
+        final type = a['type'] as String?;
+        // A transfer or internal rule has no category.
+        final plain = type != 'transfer' && type != 'internal';
+        final c = plain ? _category(a['category_id']) : null;
+        final target =
+            type == 'transfer' ? _account(a['target_account_id']) : null;
+        final auto = a['auto'] == true;
+        try {
+          await ImportRulesService.save(ImportRule(
+              id: id,
+              pattern: a['pattern'] as String,
+              type: type ?? c!.type,
+              categoryId: c?.id ?? '',
+              subcategory: plain ? a['subcategory'] as String? ?? '' : '',
+              auto: auto,
+              targetAccountId: target?.id));
+        } on ArgumentError catch (e) {
+          throw StateError('${e.message}');
+        }
+        return {
+          'rule_id': id,
+          'message': auto
+              ? 'Regra salva: o app registra sozinho o que casar com o texto.'
+              : 'Regra salva.'
+        };
       case 'rule.delete':
         await ImportRulesService.delete(a['id'] as String);
         return {'rule_id': a['id'], 'message': 'Regra excluída.'};

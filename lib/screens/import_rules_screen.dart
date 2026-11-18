@@ -17,13 +17,22 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
     final sub = TextEditingController(text: rule?.subcategory);
     var type = rule?.type ?? 'expense';
     String? category = rule?.categoryId;
+    var auto = rule?.auto ?? false;
+    String? target = rule?.targetAccountId;
     String? error;
     bool busy = false;
     await showDialog<void>(
         context: context,
-        builder: (ctx) => StatefulBuilder(builder: (ctx, update) {
+        // The fields outlive the closing animation: they are released with
+        // the dialog, not when it starts to close.
+        builder: (ctx) => _Owns(
+            controllers: [pattern, sub],
+            child: StatefulBuilder(builder: (ctx, update) {
+              final plain = type == 'expense' || type == 'income';
               final cats = app.categories.where((c) => c.type == type).toList();
               if (!cats.any((c) => c.id == category)) category = null;
+              final targets = app.cashAccounts.where((a) => !a.isGold).toList();
+              if (!targets.any((a) => a.id == target)) target = null;
               return AlertDialog(
                   title: Text(rule == null ? 'Nova regra' : 'Editar regra'),
                   content: SingleChildScrollView(
@@ -40,7 +49,13 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                           DropdownMenuItem(
                               value: 'expense', child: Text('Despesa')),
                           DropdownMenuItem(
-                              value: 'income', child: Text('Receita'))
+                              value: 'income', child: Text('Receita')),
+                          DropdownMenuItem(
+                              value: 'transfer',
+                              child: Text('Transferência entre contas suas')),
+                          DropdownMenuItem(
+                              value: 'internal',
+                              child: Text('Não é lançamento (sai da fila)'))
                         ],
                         onChanged: busy
                             ? null
@@ -48,24 +63,52 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                                   type = v!;
                                   category = null;
                                 })),
-                    DropdownButtonFormField<String>(
-                        key: ValueKey('$type:$category'),
-                        initialValue: category,
-                        isExpanded: true,
-                        decoration:
-                            const InputDecoration(labelText: 'Categoria'),
-                        items: cats
-                            .map((c) => DropdownMenuItem(
-                                value: c.id,
-                                child: Text(c.name,
-                                    overflow: TextOverflow.ellipsis)))
-                            .toList(),
-                        onChanged:
-                            busy ? null : (v) => update(() => category = v)),
-                    TextField(
-                        controller: sub,
-                        decoration: const InputDecoration(
-                            labelText: 'Subcategoria (opcional)')),
+                    if (plain) ...[
+                      DropdownButtonFormField<String>(
+                          key: ValueKey('$type:$category'),
+                          initialValue: category,
+                          isExpanded: true,
+                          decoration:
+                              const InputDecoration(labelText: 'Categoria'),
+                          items: cats
+                              .map((c) => DropdownMenuItem(
+                                  value: c.id,
+                                  child: Text(c.name,
+                                      overflow: TextOverflow.ellipsis)))
+                              .toList(),
+                          onChanged:
+                              busy ? null : (v) => update(() => category = v)),
+                      TextField(
+                          controller: sub,
+                          decoration: const InputDecoration(
+                              labelText: 'Subcategoria (opcional)')),
+                    ],
+                    if (type == 'transfer')
+                      DropdownButtonFormField<String>(
+                          key: ValueKey('target:$target'),
+                          initialValue: target,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                              labelText: 'A outra conta',
+                              helperText:
+                                  'Saída do banco: o dinheiro vai para ela. Entrada: vem dela.'),
+                          items: targets
+                              .map((a) => DropdownMenuItem(
+                                  value: a.id,
+                                  child: Text(a.name,
+                                      overflow: TextOverflow.ellipsis)))
+                              .toList(),
+                          onChanged:
+                              busy ? null : (v) => update(() => target = v)),
+                    SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: auto,
+                        onChanged: busy ? null : (v) => update(() => auto = v),
+                        title: Text(type == 'internal'
+                            ? 'Tirar da fila sozinho'
+                            : 'Lançar sozinho'),
+                        subtitle: const Text(
+                            'Sem perguntar. Cada vez aparece em Para revisar › Resolvidas automaticamente e pode ser desfeito.')),
                     if (error != null)
                       Text(error!,
                           style: TextStyle(
@@ -80,9 +123,14 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                             ? null
                             : () async {
                                 if (pattern.text.trim().isEmpty ||
-                                    category == null) {
+                                    (plain && category == null)) {
                                   update(() => error =
                                       'Preencha a descrição e a categoria.');
+                                  return;
+                                }
+                                if (type == 'transfer' && target == null) {
+                                  update(() => error =
+                                      'Escolha a outra conta da transferência.');
                                   return;
                                 }
                                 update(() => busy = true);
@@ -91,23 +139,26 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                                       id: rule?.id ?? app.newId(),
                                       pattern: pattern.text,
                                       type: type,
-                                      categoryId: category!,
-                                      subcategory: sub.text));
+                                      categoryId: plain ? category! : '',
+                                      subcategory: plain ? sub.text : '',
+                                      auto: auto,
+                                      targetAccountId:
+                                          type == 'transfer' ? target : null));
                                   if (ctx.mounted) Navigator.pop(ctx);
-                                } catch (_) {
+                                } catch (e) {
                                   if (ctx.mounted)
                                     update(() {
                                       busy = false;
-                                      error =
-                                          'Não foi possível salvar. Revise a categoria e tente novamente.';
+                                      // The service says what is missing.
+                                      error = e is ArgumentError
+                                          ? '${e.message}'
+                                          : 'Não foi possível salvar. Revise a categoria e tente novamente.';
                                     });
                                 }
                               },
                         child: const Text('Salvar'))
                   ]);
-            }));
-    pattern.dispose();
-    sub.dispose();
+            })));
     if (mounted)
       setState(() {
         _rules = ImportRulesService.load();
@@ -116,7 +167,7 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Regras de categoria')),
+      appBar: AppBar(title: const Text('Regras do banco')),
       floatingActionButton: FloatingActionButton(
           onPressed: () => _edit(),
           tooltip: 'Nova regra',
@@ -133,7 +184,7 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                 children: [
                   const Text(
-                      'Sugerem categorias na revisão de notificações e importações. O texto mais específico tem prioridade. Não alteram lançamentos antigos nem o saldo.'),
+                      'Dizem o que fazer com um movimento do banco pelo texto dele: sugerir a categoria, tratar como transferência entre contas suas ou tirar da fila. O texto mais específico tem prioridade. Não alteram lançamentos antigos.'),
                   Wrap(spacing: 8, children: [
                     for (final example in const [
                       ('IFOOD', 'Delivery'),
@@ -158,8 +209,8 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                   for (final r in snapshot.data!)
                     ListTile(
                         title: Text(r.pattern),
-                        subtitle: Text(
-                            '${context.read<AppProvider>().categoryById(r.categoryId)?.name ?? 'Categoria removida'} • ${r.subcategory}'),
+                        subtitle:
+                            Text(ruleSummary(r, context.read<AppProvider>())),
                         onTap: () => _edit(r),
                         trailing: IconButton(
                             tooltip: 'Excluir regra',
@@ -197,4 +248,44 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
                             }))
                 ]);
           }));
+}
+
+/// What a rule does, in a line: the category, the transfer or "sai da fila",
+/// and whether the app does it without asking.
+String ruleSummary(ImportRule r, AppProvider app) {
+  final what = switch (r.type) {
+    'transfer' =>
+      'Transferência com ${app.accountById(r.targetAccountId ?? '')?.name ?? 'conta removida'}',
+    'internal' => 'Não é lançamento',
+    _ => [
+        app.categoryById(r.categoryId)?.name ?? 'Categoria removida',
+        if (r.subcategory.isNotEmpty) r.subcategory
+      ].join(' • '),
+  };
+  return r.auto
+      ? '$what • ${r.type == 'internal' ? 'sai da fila sozinho' : 'lança sozinho'}'
+      : what;
+}
+
+/// Releases text controllers when the widget leaves the tree.
+class _Owns extends StatefulWidget {
+  const _Owns({required this.controllers, required this.child});
+  final List<TextEditingController> controllers;
+  final Widget child;
+
+  @override
+  State<_Owns> createState() => _OwnsState();
+}
+
+class _OwnsState extends State<_Owns> {
+  @override
+  void dispose() {
+    for (final c in widget.controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

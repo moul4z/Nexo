@@ -226,8 +226,9 @@ List<CommandEntry> paletteEntries(AppProvider app, String query) {
         icon: Icons.label_outline_rounded,
         run: (h) => h.push(const CategoriesScreen())),
     CommandEntry(
-        title: 'Regras de categoria',
+        title: 'Regras do banco',
         icon: Icons.rule,
+        keywords: 'regras de categoria lançar sozinho automático automatico',
         run: (h) => h.push(const ImportRulesScreen())),
     CommandEntry(
         title: 'Empréstimos',

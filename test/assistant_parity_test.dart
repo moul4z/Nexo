@@ -695,6 +695,49 @@ void main() {
     expect(await ImportRulesService.load(), isEmpty);
   });
 
+  test('rules: transfer, internal and "register by itself"', () async {
+    final (s1, r1) = await send('rule.save', {
+      'pattern': 'Casa de Apostas Exemplo',
+      'type': 'transfer',
+      'category_id': '',
+      'subcategory': '',
+      'target_account_id': 'bank',
+      'auto': true,
+    });
+    expect(s1, 'done');
+    expect(r1['message'], contains('sozinho'));
+    var rule = (await ImportRulesService.load()).single;
+    expect([rule.type, rule.auto, rule.targetAccountId, rule.categoryId],
+        ['transfer', true, 'bank', '']);
+
+    // Changing it keeps the id: one rule, now a plain question.
+    await send('rule.save', {
+      'id': rule.id,
+      'pattern': 'Casa de Apostas Exemplo',
+      'type': 'internal',
+      'category_id': '',
+    });
+    rule = (await ImportRulesService.load()).single;
+    expect([rule.type, rule.auto, rule.targetAccountId],
+        ['internal', false, null]);
+    await send('rule.delete', {'id': rule.id});
+
+    // Refused with what is missing, and nothing is saved.
+    final (s2, r2) = await send(
+        'rule.save', {'pattern': 'Corretora Exemplo', 'type': 'transfer'});
+    expect(s2, 'rejected');
+    expect('$r2', contains('conta'));
+    final (s3, r3) = await send('rule.save', {
+      'pattern': 'ab',
+      'type': 'expense',
+      'category_id': 'food_exp',
+      'auto': true
+    });
+    expect(s3, 'rejected');
+    expect('$r3', contains('3 letras'));
+    expect(await ImportRulesService.load(), isEmpty);
+  });
+
   test('investments: archive only when closed, remove and link operations',
       () async {
     await send(
