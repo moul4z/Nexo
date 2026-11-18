@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.18.0] - 2026-11-18
+### Conciliação com o Open Finance
+- **Uma regra só no app e no Claude:** o que o app decide em "Para revisar" é o que o conector mostra. Um arquivo de casos roda nos dois lados; se um divergir, o teste falha.
+- **Pix entre contas suas** (mesmo valor, sentidos opostos, mesmo dia ou no seguinte): entre dois bancos da mesma conta do Nexo, sai da fila sem lançar; entre contas diferentes, vira transferência sozinho.
+- **Pagamento de fatura dos dois lados:** a saída do banco e o "Pagamento recebido" do cartão formam um par. Já lançado, liga as duas pontas; não lançado, "Registrar pagamento da fatura" num toque.
+- **Estorno:** pagamento e devolução com a mesma referência da operação se anulam. Sem referência, vale o mesmo estabelecimento e valor em até 30 dias.
+- **Já lançado não fica na fila:** o app liga sozinho o movimento ao lançamento certo, um para um, do mesmo tipo.
+- **Rendimentos:** lançados sozinhos como receita na conta do banco até R$ 100 (acima disso, pergunta), ou ignorados, à escolha.
+- **IOF de compra internacional** que chega no dia seguinte é somado à compra.
+- **Regras do banco** (antes "Regras de categoria"): além de sugerir categoria, uma regra pode dizer que o movimento é transferência para outra conta sua ou que não é lançamento, e pode "lançar sozinho". Tudo que o app lança sozinho aparece em Resolvidas automaticamente, com o motivo, e pode ser desfeito.
+- **Conferir com o banco, item a item:** "Ver o que explica" mostra o que o banco tem e o Nexo não, o que só o Nexo tem, o que foi ignorado e quanto da diferença isso explica, antes de ajustar o saldo.
+### Conector
+- `reconcile_account`: a mesma conferência item a item, para entender a diferença antes de `adjust_account_balance`.
+- `list_suggestions` com a classificação do app e o que ele já resolveu sozinho; `link_suggestion` só liga ao que pode ser o mesmo movimento.
+- `save_import_rule` com transferência, movimento interno e lançar sozinho (exige esta versão do app).
+- `get_card_invoices` e `get_cash_projection`: faturas futuras, recorrentes de cartão no ciclo certo, limite contando todas as parcelas. `get_bank_accounts` nunca devolve vencimento que já passou.
+- Datas que não existem e filtros de tipo errado são recusados, nunca ignorados. Texto vindo do banco é tratado como dado.
+### Dinheiro
+- **Acerto de saldo nunca é receita nem despesa:** lançamento na categoria de ajuste vira ajuste neutro; Categorias oferece converter os antigos.
+- Gasto com categoria não vira neutro pelo texto do banco ("Transferência enviada…" numa compra continua sendo gasto).
+- Moedas sem cotação não são convertidas de 1 para 1: o app recusa e diz por quê.
+- Contas do tipo Banco voltam a aparecer no seletor de conta de Transferir e dos formulários.
+### Investir
+- **Importação da B3** grava a quantidade inteira (gravava um milhão de vezes menor).
+- Câmbio e cotação aceitam mais de duas casas.
+### Sincronização
+- Uma gravação recusada pelo servidor não trava mais a fila das seguintes.
+- O mesmo pedido do Claude não é aplicado duas vezes por dois aparelhos (transferência, pagamento de fatura, movimento de objetivo, sugestão que vira transferência).
+### Proteção dos dados
+- **Cópia do banco antes de cada migração** (guarda as três últimas). Banco de uma versão mais nova que o app: o app avisa e não abre por cima.
+- Build de desenvolvimento abre um perfil separado, nunca os dados reais.
+- Erros fora de `try` vão para o diagnóstico.
+### Servidor
+- Migrations `202611180001_reconcile.sql` (aplicar antes do `pluggy-sync` novo) e `202611180002_audit.sql` (funções do banco e do conector só atendem o acervo real; apagar um acervo apaga o que depende dele). Schema local **29** (só acrescenta colunas).
+
 ## [1.17.0] - 2026-11-13
 ### Fila do Claude com o app fechado
 - **O celular grava os pedidos do Claude com o app fechado:** confere a fila sozinho a cada 15 minutos e, com o Firebase configurado (grátis, opcional), na hora em que o servidor avisa. Medido num Xiaomi com a economia de bateria padrão: 9 min do pedido ao registro, passada de 8 s, e o agendamento continua depois de arrastar o app para fora dos recentes.
