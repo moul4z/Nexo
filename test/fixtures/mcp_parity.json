@@ -23,6 +23,7 @@
         "credit_limit": null,
         "min_payment_amount": null,
         "min_payment_percent": null,
+        "interest_monthly_percent": null,
         "credit_reminder_enabled": 0,
         "credit_reminder_time": "09:00",
         "credit_early_reminder_enabled": 0,
@@ -48,6 +49,7 @@
         "credit_limit": null,
         "min_payment_amount": null,
         "min_payment_percent": null,
+        "interest_monthly_percent": null,
         "credit_reminder_enabled": 0,
         "credit_reminder_time": "09:00",
         "credit_early_reminder_enabled": 0,
@@ -73,6 +75,7 @@
         "credit_limit": null,
         "min_payment_amount": null,
         "min_payment_percent": null,
+        "interest_monthly_percent": null,
         "credit_reminder_enabled": 0,
         "credit_reminder_time": "09:00",
         "credit_early_reminder_enabled": 0,
@@ -98,6 +101,7 @@
         "credit_limit": null,
         "min_payment_amount": null,
         "min_payment_percent": null,
+        "interest_monthly_percent": null,
         "credit_reminder_enabled": 0,
         "credit_reminder_time": "09:00",
         "credit_early_reminder_enabled": 0,
@@ -409,7 +413,8 @@
         "reminder_time": "09:00",
         "early_reminder_enabled": 0,
         "notes": "",
-        "recurring_type": "subscription"
+        "recurring_type": "subscription",
+        "iof_percent": null
       }
     ],
     "investments": [],
