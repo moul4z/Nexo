@@ -196,6 +196,11 @@ class _EnvelopeTile extends StatelessWidget {
         : line.isSaving && ratio >= 1
             ? NexoTones.income(context)
             : cs.onSurface;
+    final status = line.over
+        ? 'passou'
+        : line.isSaving && ratio >= 1
+            ? 'feito'
+            : null;
     return NexoCard(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: InkWell(
@@ -210,14 +215,20 @@ class _EnvelopeTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style:
                         TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+            // Beside the name, which gives way first: the status is never
+            // cut ("132% · pa…" beside the goal, on a 412-wide phone).
+            if (status != null) ...[
+              const SizedBox(width: 6),
+              Text(status,
+                  maxLines: 1,
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: tone, fontWeight: FontWeight.w600)),
+            ],
           ]),
           const SizedBox(height: 6),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Expanded(
-              child: Text(
-                  pct == null
-                      ? '—'
-                      : '$pct%${line.over ? ' · passou' : line.isSaving && ratio >= 1 ? ' · feito' : ''}',
+              child: Text(pct == null ? '—' : '$pct%',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium?.copyWith(

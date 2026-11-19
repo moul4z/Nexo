@@ -163,7 +163,8 @@ void main() {
     await tester.pumpWidget(build(false));
     expect(find.text('Por tipo de gasto'), findsOneWidget);
     expect(find.text('Prazeres'), findsOneWidget);
-    expect(find.text('120% · passou'), findsOneWidget);
+    expect(find.text('120%'), findsOneWidget);
+    expect(find.text('passou'), findsOneWidget);
     expect(find.textContaining('1 categoria sem tipo'), findsOneWidget);
     await tester.tap(find.text('Ajustar'));
     await tester.pump();
@@ -176,5 +177,10 @@ void main() {
     expect(find.textContaining('R\$ 600'), findsNothing);
     expect(find.text('•••• de ••••'), findsNWidgets(6));
     expect(tester.takeException(), isNull);
+    // A phone 412 wide, two cards per row: the status is never cut.
+    tester.view.physicalSize = const Size(412, 1800);
+    await tester.pumpWidget(build(false));
+    expect(tester.takeException(), isNull);
+    expect(find.text('passou'), findsOneWidget);
   });
 }
