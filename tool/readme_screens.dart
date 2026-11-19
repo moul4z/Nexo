@@ -3,8 +3,9 @@
 //
 //   flutter test tool/readme_screens.dart
 //
-// Writes docs/images/nexo-home-mobile.png and nexo-home-desktop.png. Needs
-// the Material icons from the Flutter cache.
+// Writes docs/images/nexo-*.png: the phone tabs and the desktop home, in the
+// app's default look (Nexo theme, dark). Needs the Material icons from the
+// Flutter cache.
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -69,17 +70,19 @@ AppProvider _fixture() {
         creditLimit: 3000,
         linkedAccountId: 'main'),
   ];
+  // The kind of spending feeds "Por tipo de gasto" in Orçamento.
   AppCategory cat(String id, String name, int color,
-          [String type = 'expense']) =>
-      AppCategory(id: id, name: name, type: type, colorValue: color);
+          {String type = 'expense', String? kind}) =>
+      AppCategory(
+          id: id, name: name, type: type, colorValue: color, envelope: kind);
   app.categories = [
-    cat('food', 'Alimentação', 0xff2e7d32),
-    cat('home', 'Moradia', 0xff1565c0),
+    cat('food', 'Alimentação', 0xff2e7d32, kind: 'comfort'),
+    cat('home', 'Moradia', 0xff1565c0, kind: 'fixed'),
     cat('transport', 'Transporte', 0xffef6c00),
-    cat('fun', 'Lazer', 0xff8e24aa),
+    cat('fun', 'Lazer', 0xff8e24aa, kind: 'pleasures'),
     cat('health', 'Saúde', 0xffc62828),
-    cat('subs', 'Assinaturas', 0xff00838f),
-    cat('salary', 'Salário', 0xff2e7d32, 'income'),
+    cat('subs', 'Assinaturas', 0xff00838f, kind: 'pleasures'),
+    cat('salary', 'Salário', 0xff2e7d32, type: 'income'),
   ];
   var n = 0;
   AppTransaction tx(String desc, double amount, String category, int d,
@@ -209,17 +212,34 @@ void main() {
   });
 
   for (final shot in [
+    // Tab indexes as in MainShell.
     (
       name: 'nexo-home-mobile',
       size: const Size(412, 915),
       ratio: 2.0,
-      desktop: false
+      desktop: false,
+      tab: 0
+    ),
+    (
+      name: 'nexo-extrato-mobile',
+      size: const Size(412, 915),
+      ratio: 2.0,
+      desktop: false,
+      tab: 8
+    ),
+    (
+      name: 'nexo-orcamento-mobile',
+      size: const Size(412, 915),
+      ratio: 2.0,
+      desktop: false,
+      tab: 4
     ),
     (
       name: 'nexo-home-desktop',
       size: const Size(1440, 900),
       ratio: 1.0,
-      desktop: true
+      desktop: true,
+      tab: 0
     ),
   ]) {
     testWidgets(shot.name, (tester) async {
@@ -228,6 +248,7 @@ void main() {
       tester.view.physicalSize = shot.size * shot.ratio;
       tester.view.devicePixelRatio = shot.ratio;
       final app = _fixture();
+      app.tabIndexNotifier.value = shot.tab;
       final boundary = GlobalKey();
       await tester.pumpWidget(ChangeNotifierProvider.value(
           value: app,
@@ -238,7 +259,7 @@ void main() {
                 locale: const Locale('pt'),
                 localizationsDelegates: AppLocalizations.localizationsDelegates,
                 supportedLocales: AppLocalizations.supportedLocales,
-                theme: buildTheme(seed: 'teal', dark: false),
+                theme: buildTheme(seed: 'nexo', dark: true),
                 home: const MainShell()),
           )));
       for (var i = 0; i < 20; i++) {

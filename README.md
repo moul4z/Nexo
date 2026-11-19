@@ -25,22 +25,25 @@ O Nexo reúne saldo, gastos, cartões, dívidas, investimentos e previsão de ca
 - **Extrato:** lançamentos por dia, busca, filtros, calendário de gastos e formulário rápido com lançamentos anteriores e atalhos de data.
 - **Orçamento e planejamento:** orçamentos por categoria (proporcionais ou cheios no mês em que começam), visão por tipo de gasto (Custos fixos, Conforto, Metas, Prazeres, Conhecimento, Liberdade financeira) em % de uma renda de referência, recorrentes, assinaturas, objetivos e "Mês em revisão".
 - **Contas e cartões:** transferências, faturas com a regra do fechamento do banco, pagamento de fatura sem duplicar gasto, empréstimos e dinheiro emprestado.
-- **Investimentos:** carteira, proventos, comparação com o CDI e prazos de liquidez (D+0, D+2 úteis) para saber quanto dá para resgatar até uma data.
-- **Open Finance (opcional):** movimentações dos bancos conectados chegam como sugestões na caixa "Para revisar", com conciliação automática; saldo do banco × saldo do Nexo com ajuste neutro; limite real e fatura oficial do cartão.
-- **Assistente (opcional):** conector MCP com o qual o Claude faz no Nexo tudo o que a pessoa faz nas telas (98 ferramentas), com as mesmas regras do app. Cada pedido pode ser desfeito, repetir um pedido não duplica nada e tudo aparece em "Feito pelo Claude" no app. Matriz de cobertura em [docs/mcp-paridade.md](docs/mcp-paridade.md).
+- **Investimentos:** carteira em reais e em dólar, proventos, importação da B3, comparação com o CDI e prazos de liquidez (D+0, D+2 úteis) para saber quanto dá para resgatar até uma data.
+- **Open Finance (opcional):** movimentações dos bancos conectados chegam na caixa "Para revisar". O app resolve sozinho o que não é dúvida (Pix entre contas suas, pagamento de fatura visto dos dois lados, estorno, o que já estava lançado, rendimentos) e mostra o motivo de cada decisão, que pode ser desfeita. Regras do banco dizem o que fazer com um movimento pelo texto dele.
+- **Conferir com o banco:** saldo do banco × saldo do Nexo, item a item: o que o banco tem e o Nexo não, o que só o Nexo tem e quanto da diferença isso explica, antes de um ajuste neutro. Limite real e fatura oficial do cartão.
+- **Assistente (opcional):** conector MCP com o qual o Claude faz no Nexo tudo o que a pessoa faz nas telas (102 ferramentas), com as mesmas regras do app, inclusive com o app fechado. Cada pedido pode ser desfeito, repetir um pedido não duplica nada e tudo aparece em "Feito pelo Claude" no app. Matriz de cobertura em [docs/mcp-paridade.md](docs/mcp-paridade.md).
 - **Seus arquivos:** importação com revisão, exportação CSV/XLSX e backup/restauração.
 - **Proteção:** PIN, modo de privacidade que oculta valores e recursos de segurança de cada plataforma.
 
 ## Telas
 
-As imagens abaixo são da versão 1.12.7, geradas com **dados fictícios** a partir das telas reais do app (`flutter test tool/readme_screens.dart`). Não representam finanças pessoais reais.
+As imagens abaixo são da versão 1.18.0, geradas com **dados fictícios** a partir das telas reais do app (`flutter test tool/readme_screens.dart`). Não representam finanças pessoais reais.
 
 <p align="center">
-  <img src="docs/images/nexo-home-mobile.png" width="320" alt="Home do Nexo com saldo, resumo mensal e atalhos usando dados fictícios" />
+  <img src="docs/images/nexo-home-mobile.png" width="270" alt="Tela Hoje do Nexo no celular: saldo em contas, quanto posso gastar por dia e atalhos, com dados fictícios" />
+  <img src="docs/images/nexo-extrato-mobile.png" width="270" alt="Extrato do Nexo no celular: busca, filtros, totais do mês e lançamentos por dia, com dados fictícios" />
+  <img src="docs/images/nexo-orcamento-mobile.png" width="270" alt="Orçamento do Nexo no celular: orçado no mês e metas por tipo de gasto, com dados fictícios" />
 </p>
 
 <p align="center">
-  <img src="docs/images/nexo-home-desktop.png" width="1100" alt="Painel do Nexo com previsão de caixa e categorias usando dados fictícios" />
+  <img src="docs/images/nexo-home-desktop.png" width="1100" alt="Painel do Nexo no Windows: saldo, resumo do mês, ritmo de gastos, previsão de caixa e categorias, com dados fictícios" />
 </p>
 
 ## Precisão antes de automação
@@ -48,22 +51,24 @@ As imagens abaixo são da versão 1.12.7, geradas com **dados fictícios** a par
 - Despesas pendentes não reduzem o saldo atual.
 - Transferências, reservas e aportes não viram consumo.
 - Compras no cartão entram na fatura; compra feita no dia do fechamento vai para a fatura seguinte, como no banco; pagar a fatura não cria uma segunda despesa.
-- Sugestões do Open Finance exigem revisão (ou conciliação segura) antes de virar lançamento. Nada cria ou apaga dinheiro sozinho.
-- Diferença de saldo com o banco se corrige com **ajuste neutro**, que não conta como gasto nem receita.
+- Sugestões do Open Finance exigem revisão (ou conciliação segura) antes de virar lançamento. O que o app lança sozinho aparece em "Resolvidas automaticamente", com o motivo, e pode ser desfeito. Nada cria ou apaga dinheiro em silêncio.
+- A regra de conciliação é a mesma no app e no assistente: um arquivo de casos roda nos dois lados e o teste falha se um divergir.
+- Diferença de saldo com o banco se corrige com **ajuste neutro**, que não conta como gasto nem receita. Um lançamento na categoria de acerto de saldo vira ajuste neutro.
+- O banco é copiado antes de cada migração, e um build de desenvolvimento nunca abre os dados reais.
 - A fatura do banco é mostrada como conferência; nada é lançado ou pago a partir dela.
 - A previsão usa compromissos cadastrados. Não presume salário nem gastos futuros desconhecidos.
 
 ## Estado do projeto
 
-Versão de referência: **1.17.0+59** (novembro de 2026, schema 28). Detalhes em [CHANGELOG.md](CHANGELOG.md).
+Versão de referência: **1.18.0+60** (novembro de 2026, schema 29). Detalhes em [CHANGELOG.md](CHANGELOG.md).
 
 | Área | Situação |
 | --- | --- |
 | Android | Em uso diário; instalação direta (sem Play Store) |
-| Windows | Aplicativo nativo em uso, com SQLite local; homologação manual completa ainda em andamento |
+| Windows | Aplicativo nativo, com SQLite local; homologação manual completa ainda em andamento. O executável não é assinado: o Controle Inteligente de Aplicativos do Windows pode bloquear um build novo |
 | Funcionamento offline | Registros e consultas são locais; sincronização, Open Finance e cotações dependem de conexão |
 | Sincronização celular ↔ PC | Ativa desde 20/10/2026, por um projeto Supabase próprio, com consentimento, backup e conferência com o servidor |
-| Open Finance | Leitura via Meu Pluggy (gratuito para uso pessoal); sem pagamentos, Pix ou transferências |
+| Open Finance | Leitura via Meu Pluggy (gratuito para uso pessoal), com conciliação automática do que não é dúvida; sem pagamentos, Pix ou transferências |
 | Assistente (Claude/MCP) | Ativo; paridade com as telas desde a 1.13.0. O servidor só enfileira pedidos, um de cada vez; quem grava é o app com as próprias regras. Um teste falha se o app ganhar uma escrita sem ferramenta |
 | Telegram/WhatsApp | Proposta documentada; sem bot em produção |
 
@@ -74,7 +79,7 @@ Não há publicação oficial do Nexo na Play Store. O repositório não inclui 
 Use Flutter e Dart compatíveis com `pubspec.yaml`; o ambiente atual usa Flutter **3.47.5**. Confira a instalação com `flutter doctor -v`.
 
 ```sh
-git clone https://github.com/daniel-moulaz/Nexo.git
+git clone https://github.com/moul4z/Nexo.git
 cd Nexo
 flutter pub get
 flutter analyze
@@ -111,7 +116,9 @@ flutter run -d windows
 flutter build windows --release --dart-define-from-file=tool/nexo_sync.local.json
 ```
 
-O bundle Windows fica em `build/windows/x64/runner/Release/`. Distribua a **pasta inteira**, incluindo DLLs e `data/`, e execute `Nexo.exe`. Para testar sem tocar nos seus dados, use o perfil de teste: `Nexo.exe --test-profile`.
+O bundle Windows fica em `build/windows/x64/runner/Release/`. Distribua a **pasta inteira**, incluindo DLLs e `data/`, e execute `Nexo.exe`. Para testar sem tocar nos seus dados, use o perfil de teste: `Nexo.exe --test-profile`. Um build que não é de release abre sozinho um perfil de desenvolvimento, separado dos dados reais.
+
+O `Nexo.exe` não é assinado. Com o Controle Inteligente de Aplicativos do Windows ligado, um executável novo pode ser bloqueado ao abrir; isso é decisão do Windows, não um defeito do build.
 
 Credenciais de assinatura ficam apenas na máquina de desenvolvimento. Sem configuração de assinatura própria, o projeto usa a assinatura de depuração como fallback; esse build não equivale a uma distribuição pública assinada.
 
@@ -123,6 +130,9 @@ Tudo em `supabase/`, para um projeto Supabase próprio (plano gratuito):
 - **Edge Functions:**
   - `pluggy-sync`: lê contas, transações e faturas do Meu Pluggy e grava sugestões. Segredos: `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`, `NEXO_PLUGGY_OWNER`.
   - `nexo-mcp`: servidor MCP do assistente, autenticado por token do conector (só o hash fica no banco). Publicação e ciclo dos pedidos em [supabase/functions/nexo-mcp/README.md](supabase/functions/nexo-mcp/README.md).
+  - `market-quotes`: cotações e fechamentos de ações dos EUA; a chave do provedor fica no servidor. Segredo: `FINNHUB_API_KEY`.
+
+Ao atualizar um servidor existente, aplique as migrations em ordem **antes** de publicar as funções: a `pluggy-sync` desta versão depende de `202611180001_reconcile.sql`.
 
 Testes do servidor, sem rede e só com dados fictícios:
 
@@ -130,6 +140,7 @@ Testes do servidor, sem rede e só com dados fictícios:
 node tool/validate_sync_sql.mjs   # SQL em PGlite
 node tool/test_nexo_mcp.mjs       # servidor MCP
 node tool/test_pluggy.mjs         # Open Finance
+node tool/test_market_quotes.mjs  # cotações
 ```
 
 O teste `test/mcp_app_parity_test.dart` lê o código do app e do servidor e falha se uma escrita do app não tiver ferramenta do assistente (ou motivo registrado em `lib/sync/app_actions.dart`).
@@ -162,7 +173,7 @@ Os documentos registram etapas diferentes do desenvolvimento; consulte a data e 
 
 ## Desenvolvimento
 
-O Nexo é desenvolvido por [Daniel Moulaz](https://github.com/daniel-moulaz) e foi construído a partir de uma base open source sob licença MIT, o [Expensy](https://github.com/mina-android/Expensy), de Mina Android; os créditos estão em [`LICENSE`](LICENSE).
+O Nexo é desenvolvido por [Daniel Moulaz](https://github.com/moul4z) e foi construído a partir de uma base open source sob licença MIT, o [Expensy](https://github.com/mina-android/Expensy), de Mina Android; os créditos estão em [`LICENSE`](LICENSE).
 
 Contribuições devem manter testes relevantes, compatibilidade dos dados e migrações explícitas quando necessárias. Nunca inclua bancos pessoais, notificações reais, extratos, PINs, tokens, chaves de serviço, keystores ou arquivos de configuração locais em commits ou issues.
 
