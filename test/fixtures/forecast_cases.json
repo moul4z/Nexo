@@ -18,7 +18,8 @@
       "expect": {
         "start": 100000,
         "end": 308000,
-        "events": [["2026-11-28", -12000], ["2026-12-01", 300000], ["2026-12-05", -80000]]
+        "events": [["2026-11-28", -12000], ["2026-12-01", 300000], ["2026-12-05", -80000]],
+        "safePerDay": 7512
       }
     },
     {
@@ -127,6 +128,50 @@
         "start": 100000,
         "end": 100000,
         "events": []
+      }
+    },
+    {
+      "name": "P8 média do dia a dia: conta sai todo dia, cartão vai para a fatura; recorrente, parcela, pontual e neutro ficam fora",
+      "today": "2026-11-20",
+      "until": "2026-12-10",
+      "daily": "average",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000},
+        {"id": "card", "type": "credit", "balance": 0, "statementDay": 25, "dueDay": 5, "linkedAccountId": "bank"}
+      ],
+      "transactions": [
+        {"id": "feira", "type": "expense", "amount": 280, "accountId": "bank", "date": "2026-11-10"},
+        {"id": "cinema", "type": "expense", "amount": 140, "accountId": "card", "date": "2026-11-12"},
+        {"id": "recurring:aluguel:2026-11-05T00:00:00.000", "type": "expense", "amount": 800, "accountId": "bank", "date": "2026-11-05", "source": "recurring"},
+        {"id": "tv", "type": "expense", "amount": 2000, "accountId": "bank", "date": "2026-11-01", "expenseClass": "extraordinary"},
+        {"id": "reserva", "type": "expense", "amount": 500, "accountId": "bank", "date": "2026-11-03", "excludeFromSpending": true},
+        {"id": "parcela", "type": "expense", "amount": 90, "accountId": "card", "date": "2026-11-08", "source": "installment"},
+        {"id": "antiga", "type": "expense", "amount": 500, "accountId": "bank", "date": "2026-10-01"},
+        {"id": "hoje", "type": "expense", "amount": 70, "accountId": "bank", "date": "2026-11-20"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 55000,
+        "events": [["2026-12-05", -25000]],
+        "safePerDay": 3850
+      }
+    },
+    {
+      "name": "P9 valor por dia informado sai da conta a partir de amanhã",
+      "today": "2026-11-20",
+      "until": "2026-11-30",
+      "daily": 25,
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000}
+      ],
+      "recurring": [
+        {"id": "salario", "name": "Salário", "accountId": "bank", "amount": 500, "type": "income", "nextDate": "2026-11-25", "startDate": "2026-01-25"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 125000,
+        "events": [["2026-11-25", 50000]],
+        "safePerDay": 15000
       }
     }
   ]

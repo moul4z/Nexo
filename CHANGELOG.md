@@ -9,7 +9,12 @@
 - **Resumo da manhã:** com o app fechado, a partir das 7h, se ontem chegaram movimentos do banco que ainda esperam você, uma notificação diz quantos. O toque abre Para revisar só naquele dia.
 - **Confirmar todas:** em Para revisar, as novas que já têm categoria sugerida e conta ligada ao banco são confirmadas de uma vez, depois de mostrar quantas são e o total. O resto continua na lista. Repetir o toque não duplica.
 - **Aviso quando o app lança sozinho com ele fechado** (rendimentos, transferências entre suas contas, regras "lançar sozinho"). Os dois avisos podem ser desligados em Para revisar › ⋮ › Avisos com o app fechado.
+### Previsão de caixa
+- **Quanto dá para gastar por dia:** a Agenda e previsão mostra até quanto por dia, a partir de amanhã, sem o saldo ficar negativo em nenhum dia até a data escolhida.
+- **Gasto do dia a dia (opcional):** "Incluir o gasto do dia a dia" soma a média das últimas 4 semanas, sem recorrentes, parcelas, gastos pontuais e neutros. O que sai da conta entra todo dia; o do cartão entra na fatura do ciclo. Tudo aparece como estimativa.
+- Uma conta pendente já vencida entra na previsão de hoje, e a fatura paga por uma conta fora do total não sai do caixa, no app e no Claude. Os dois cálculos agora rodam contra os mesmos casos (`test/fixtures/forecast_cases.json`).
 ### Conector
+- `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
 - `get_daily_digest` traz `unrecorded_yesterday`: os movimentos de ontem que ainda esperam você, sem o que o app resolve sozinho.
 - `confirm_suggestion` com `recurring_id` paga a recorrente pela cobrança do banco; `pay_recurring` com `transaction_id` liga a ocorrência a um lançamento que já existe (exigem esta versão do app).
 - `list_suggestions` deixa de mostrar o que o banco não mostra mais.

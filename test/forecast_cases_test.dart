@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nexo/models/models.dart';
 import 'package:nexo/models/transaction_metadata.dart';
 import 'package:nexo/services/cash_forecast.dart';
+import 'package:nexo/services/daily_spending.dart';
 
 void main() {
   final cases =
@@ -48,12 +49,18 @@ void main() {
       ];
       final metadata = {
         for (final t in txs)
-          if (t['status'] != null)
+          if (t['status'] != null ||
+              t['expenseClass'] != null ||
+              t['excludeFromSpending'] == true ||
+              t['source'] != null)
             t['id'] as String: TransactionMetadata(
                 transactionId: t['id'] as String,
-                status: t['status'] as String,
+                status: (t['status'] as String?) ?? 'paid',
                 dueDate:
-                    t['dueDate'] == null ? null : date(t['dueDate'] as String))
+                    t['dueDate'] == null ? null : date(t['dueDate'] as String),
+                expenseClass: (t['expenseClass'] as String?) ?? 'normal',
+                excludeFromSpending: t['excludeFromSpending'] == true,
+                source: (t['source'] as String?) ?? 'manual')
       };
       final recurring = [
         for (final r in (c['recurring'] as List?) ?? const [])
@@ -72,9 +79,24 @@ void main() {
                   r['endDate'] == null ? null : date(r['endDate'] as String),
               recurringType: (r['kind'] as String?) ?? 'subscription')
       ];
-      final out = CashForecast.calculate(
-          now: today.add(const Duration(hours: 9)),
-          until: date(c['until'] as String),
+      final now = today.add(const Duration(hours: 9));
+      final until = date(c['until'] as String);
+      double same(double v, String _) => v;
+      final asked = c['daily'];
+      final daily = asked == null
+          ? null
+          : asked == 'average'
+              ? DailySpending.average(
+                  now: now,
+                  accounts: accounts,
+                  transactions: transactions,
+                  metadata: metadata,
+                  currency: 'BRL',
+                  convert: same)
+              : DailySpending((asked as num).toDouble(), 'BRL');
+      CashForecast forecast(DailySpending? daily) => CashForecast.calculate(
+          now: now,
+          until: until,
           accounts: accounts,
           transactions: transactions,
           recurring: recurring,
@@ -83,11 +105,13 @@ void main() {
             for (final p in (c['invoicePayments'] as List?) ?? const [])
               Map<String, dynamic>.from(p as Map)
           ],
-          convert: (v, _) => v);
+          convert: same,
+          daily: daily);
+      final out = forecast(daily);
       int cents(double v) => (v * 100).round();
       final got = [
         for (final e in out.events)
-          if (e.amount != 0)
+          if (e.amount != 0 && e.kind != 'estimate')
             [iso(e.date.isBefore(today) ? today : e.date), cents(e.amount)]
       ]..sort(_byDayThenAmount);
       final expect_ = c['expect'] as Map<String, dynamic>;
@@ -97,6 +121,9 @@ void main() {
       expect(got, want);
       expect(cents(out.current), expect_['start']);
       expect(cents(out.projected), expect_['end']);
+      if (expect_['safePerDay'] != null)
+        expect(cents(CashForecast.safePerDay(forecast(null), now, until, same)),
+            expect_['safePerDay']);
     });
   }
 }

@@ -911,8 +911,9 @@ const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.
     categories: [], investments: [], investmentOperations: [],
     transactions: (c.transactions ?? []).map((t) => ({ id: t.id, type: t.type, amount: t.amount, description: t.id,
       account_id: t.accountId, category_id: '', date: `${t.date}T12:00:00.000`, note: '' })),
-    metadata: (c.transactions ?? []).filter((t) => t.status).map((t) => ({ transaction_id: t.id, status: t.status,
-      due_date: t.dueDate ? `${t.dueDate}T00:00:00.000` : null })),
+    metadata: (c.transactions ?? []).filter((t) => t.status || t.expenseClass || t.excludeFromSpending || t.source)
+      .map((t) => ({ transaction_id: t.id, status: t.status ?? 'paid', due_date: t.dueDate ? `${t.dueDate}T00:00:00.000` : null,
+        expense_class: t.expenseClass ?? 'normal', exclude_from_spending: t.excludeFromSpending ? 1 : 0, source: t.source ?? 'manual' })),
     recurring: (c.recurring ?? []).map((r) => ({ id: r.id, name: r.name, payment_type: r.type, amount: r.amount,
       next_date: `${r.nextDate}T00:00:00.000`, start_date: `${r.startDate}T00:00:00.000`,
       end_date: r.endDate ? `${r.endDate}T00:00:00.000` : null, account_id: r.accountId, category_id: '',
@@ -921,7 +922,9 @@ const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.
   });
   for (const c of cases) {
     await test(`forecast fixture: ${c.name}`, async () => {
-      const out = await callAction('get_cash_projection', { until: c.until }, ledger(c), c.today, smartQueue().deps);
+      const args = c.daily === undefined ? { until: c.until } : { until: c.until, daily_spending: c.daily };
+      const out = await callAction('get_cash_projection', args, ledger(c), c.today, smartQueue().deps);
+      if (c.expect.safePerDay !== undefined) assert.equal(Math.round(out.safe_per_day * 100), c.expect.safePerDay, 'safe_per_day');
       const got = out.timeline.map((t) => [t.date, Math.round(t.amount * 100)]).sort((a, b) => a[0].localeCompare(b[0]) || a[1] - b[1]);
       const want = [...c.expect.events].sort((a, b) => a[0].localeCompare(b[0]) || a[1] - b[1]);
       assert.deepEqual(got, want);

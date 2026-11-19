@@ -1,5 +1,6 @@
 import '../models/models.dart';
 import 'billing_cycle.dart';
+import 'daily_spending.dart';
 import 'finance_rules.dart';
 import 'transaction_metadata_service.dart';
 
@@ -8,6 +9,10 @@ class ForecastEvent {
   final String title, accountId, kind, id, currency;
   final double amount; // Signed cash movement; zero for informational events.
   final DateTime? cycleEnd;
+
+  /// The part of [amount] that is the day-to-day estimate (kind "estimate"
+  /// for the account, part of an invoice for a card).
+  final double estimated;
   const ForecastEvent(
       {required this.date,
       required this.title,
@@ -16,7 +21,8 @@ class ForecastEvent {
       required this.id,
       required this.currency,
       required this.amount,
-      this.cycleEnd});
+      this.cycleEnd,
+      this.estimated = 0});
 }
 
 class CashForecast {
@@ -34,7 +40,8 @@ class CashForecast {
       required List<RecurringPayment> recurring,
       required Map<String, TransactionMetadata> metadata,
       required List<Map<String, dynamic>> invoicePayments,
-      required double Function(double, String) convert}) {
+      required double Function(double, String) convert,
+      DailySpending? daily}) {
     DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
     final end = day(until);
     final today = day(now);
@@ -46,16 +53,26 @@ class CashForecast {
         .fold<double>(0, (sum, a) => sum + convert(a.balance, a.currency));
     final events = <ForecastEvent>[];
     final warnings = <String>[];
-    final invoices =
-        <String, ({Account card, BillingCycle cycle, double amount})>{};
+    final invoices = <String,
+        ({
+      Account card,
+      BillingCycle cycle,
+      double amount,
+      double estimated
+    })>{};
     String key(String id, DateTime d) =>
         '$id|${d.toIso8601String().substring(0, 10)}';
-    void cardPurchase(Account a, DateTime date, double amount) {
+    void cardPurchase(Account a, DateTime date, double amount,
+        {bool estimate = false}) {
       final cycle = BillingCycle.forDate(date, a.statementDay, a.dueDay);
       if (cycle.due == null) return;
       final k = key(a.id, cycle.end);
-      invoices[k] =
-          (card: a, cycle: cycle, amount: (invoices[k]?.amount ?? 0) + amount);
+      invoices[k] = (
+        card: a,
+        cycle: cycle,
+        amount: (invoices[k]?.amount ?? 0) + amount,
+        estimated: (invoices[k]?.estimated ?? 0) + (estimate ? amount : 0)
+      );
     }
 
     for (final tx in transactions) {
@@ -99,14 +116,21 @@ class CashForecast {
           skippedOccurrences: original.skippedOccurrences);
       if (r.hasSkippedInstallments) {
         for (final missed in r.skippedOccurrences) {
-          if (day(missed.date).isAfter(end) || ids.contains(missed.id)) continue;
-          final amount = r.paymentType == 'income' ? missed.amount : -missed.amount;
+          if (day(missed.date).isAfter(end) || ids.contains(missed.id))
+            continue;
+          final amount =
+              r.paymentType == 'income' ? missed.amount : -missed.amount;
           if (a.type == 'credit') {
             cardPurchase(a, missed.date, -amount);
           } else {
-            events.add(ForecastEvent(date: day(missed.date), title: r.name,
-                accountId: a.id, kind: 'recurring', id: r.id,
-                currency: a.currency, amount: amount));
+            events.add(ForecastEvent(
+                date: day(missed.date),
+                title: r.name,
+                accountId: a.id,
+                kind: 'recurring',
+                id: r.id,
+                currency: a.currency,
+                amount: amount));
           }
         }
       }
@@ -161,6 +185,29 @@ class CashForecast {
               cycleEnd: cycle.end));
       }
     }
+    // Day-to-day spending, from tomorrow: what leaves the account on the
+    // day, and what goes to each card's invoice of its cycle.
+    if (daily != null) {
+      for (var d = today.add(const Duration(days: 1));
+          !d.isAfter(end);
+          d = DateTime(d.year, d.month, d.day + 1)) {
+        if (daily.cash > 0)
+          events.add(ForecastEvent(
+              date: d,
+              title: 'Gasto do dia a dia (estimativa)',
+              accountId: '',
+              kind: 'estimate',
+              id: 'estimate',
+              currency: daily.currency,
+              amount: -daily.cash,
+              estimated: -daily.cash));
+        for (final e in daily.cards.entries) {
+          final card = byId[e.key];
+          if (card != null && card.type == 'credit' && e.value > 0)
+            cardPurchase(card, d, e.value, estimate: true);
+        }
+      }
+    }
     final paid = <String, double>{};
     for (final p in invoicePayments) {
       final k = '${p['card_id']}|${p['cycle_end']}';
@@ -187,7 +234,8 @@ class CashForecast {
           id: inv.card.id,
           currency: inv.card.currency,
           amount: -remaining,
-          cycleEnd: inv.cycle.end));
+          cycleEnd: inv.cycle.end,
+          estimated: -inv.estimated.clamp(0.0, remaining).toDouble()));
     }
     events.sort((a, b) => a.date.compareTo(b.date));
     return CashForecast(
@@ -197,5 +245,32 @@ class CashForecast {
                 0, (sum, e) => sum + convert(e.amount, e.currency)),
         events,
         warnings.toSet().toList());
+  }
+
+  /// How much can be spent per day, from tomorrow up to [until], without
+  /// the cash going below zero on any day: the lowest balance of each day
+  /// divided by the days up to it. Use the forecast without day-to-day
+  /// spending. Never negative; cents rounded down.
+  static double safePerDay(CashForecast base, DateTime now, DateTime until,
+      double Function(double, String) convert) {
+    final today = DateTime(now.year, now.month, now.day);
+    final end = DateTime(until.year, until.month, until.day);
+    final byDay = <DateTime, double>{};
+    for (final e in base.events) {
+      final d = e.date.isBefore(today) ? today : e.date;
+      byDay[d] = (byDay[d] ?? 0) + convert(e.amount, e.currency);
+    }
+    var balance = base.current + (byDay[today] ?? 0);
+    double? safe;
+    var n = 0;
+    for (var d = today.add(const Duration(days: 1));
+        !d.isAfter(end);
+        d = DateTime(d.year, d.month, d.day + 1)) {
+      balance += byDay[d] ?? 0;
+      final perDay = balance / ++n;
+      if (safe == null || perDay < safe) safe = perDay;
+    }
+    if (safe == null || safe <= 0) return 0;
+    return (safe * 100 + 1e-6).floor() / 100;
   }
 }

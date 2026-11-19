@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../database/db_helper.dart';
 import '../providers/app_provider.dart';
 import '../services/cash_forecast.dart';
+import '../services/daily_spending.dart';
 import '../services/transaction_metadata_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/finance_input.dart';
@@ -32,10 +33,13 @@ class _AgendaScreenState extends State<AgendaScreen> {
   /// In the month grid, the day the person tapped (null = all days).
   DateTime? _day;
 
+  /// Day-to-day spending (average of four weeks) as an estimate.
+  bool _withDaily = false;
+
   Map<DateTime, DayLoad> _loads(List<ForecastEvent> events) {
     final loads = <DateTime, DayLoad>{};
     for (final e in events) {
-      if (e.kind == 'closing') continue;
+      if (e.kind == 'closing' || e.kind == 'estimate') continue;
       final k = NexoMonthGrid.dayKey(e.date);
       loads[k] = (loads[k] ?? const DayLoad()).add(e.amount);
     }
@@ -43,12 +47,14 @@ class _AgendaScreenState extends State<AgendaScreen> {
   }
 
   bool _visible(ForecastEvent e) =>
-      _days != -2 ||
-      _day == null ||
-      NexoMonthGrid.dayKey(e.date) == NexoMonthGrid.dayKey(_day!);
+      e.kind != 'estimate' &&
+      (_days != -2 ||
+          _day == null ||
+          NexoMonthGrid.dayKey(e.date) == NexoMonthGrid.dayKey(_day!));
 
   Future<void> _exportIcs(List<ForecastEvent> events, AppProvider app) async {
-    final ics = AgendaIcs.build(events,
+    final ics = AgendaIcs.build(
+        events.where((e) => e.kind != 'estimate').toList(),
         money: formatAmount,
         accountName: (id) => app.accountById(id)?.name ?? '');
     try {
@@ -172,15 +178,40 @@ class _AgendaScreenState extends State<AgendaScreen> {
                         'Não foi possível carregar a previsão. Reabra a agenda.'));
               if (!snapshot.hasData)
                 return const Center(child: CircularProgressIndicator());
-              final forecast = CashForecast.calculate(
-                  now: now,
-                  until: until,
-                  accounts: app.accounts,
-                  transactions: app.transactions,
-                  recurring: app.recurring,
-                  metadata: app.transactionMetadata,
-                  invoicePayments: snapshot.data!,
-                  convert: app.convertToMain);
+              CashForecast calculate(DailySpending? daily) =>
+                  CashForecast.calculate(
+                      now: now,
+                      until: until,
+                      accounts: app.accounts,
+                      transactions: app.transactions,
+                      recurring: app.recurring,
+                      metadata: app.transactionMetadata,
+                      invoicePayments: snapshot.data!,
+                      convert: app.convertToMain,
+                      daily: daily);
+              final base = calculate(null);
+              final daily = _withDaily
+                  ? DailySpending.average(
+                      now: now,
+                      accounts: app.accounts,
+                      transactions: app.transactions,
+                      metadata: app.transactionMetadata,
+                      currency: app.settings.currency,
+                      convert: app.convertToMain)
+                  : null;
+              final forecast = daily == null ? base : calculate(daily);
+              final safe = until.isAfter(today)
+                  ? CashForecast.safePerDay(base, now, until, app.convertToMain)
+                  : null;
+              final cardsPerDay = daily?.cards.entries.fold<double>(
+                      0,
+                      (s, e) =>
+                          s +
+                          app.convertToMain(
+                              e.value,
+                              app.accountById(e.key)?.currency ??
+                                  app.settings.currency)) ??
+                  0;
               return ListView(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   children: [
@@ -229,13 +260,34 @@ class _AgendaScreenState extends State<AgendaScreen> {
                                                           .colorScheme
                                                           .error
                                                       : null))),
-                                  const SizedBox(height: 8),
+                                  if (safe != null) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                        safe > 0
+                                            ? 'Para não ficar negativo até ${ptDate(until)}: até ${money(safe)} por dia, a partir de amanhã.'
+                                            : 'Os compromissos já passam do saldo antes de ${ptDate(until)}: não sobra para o dia a dia.',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium),
+                                  ],
+                                  SwitchListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      value: _withDaily,
+                                      onChanged: until.isAfter(today)
+                                          ? (v) =>
+                                              setState(() => _withDaily = v)
+                                          : null,
+                                      title: const Text(
+                                          'Incluir o gasto do dia a dia'),
+                                      subtitle: Text(daily == null
+                                          ? 'Estimativa pela média das últimas 4 semanas.'
+                                          : 'Estimativa: ${money(daily.cash)} por dia na conta e ${money(cardsPerDay)} no cartão (média de 4 semanas, sem recorrentes, parcelas e gastos pontuais).')),
                                   const ExpansionTile(
                                       tilePadding: EdgeInsets.zero,
                                       title: Text('Como calculamos'),
                                       children: [
                                         Text(
-                                            'Saldo atual + receitas previstas − compromissos cadastrados, incluindo atrasados e faturas após pagamentos parciais. Não inclui novos gastos não cadastrados. Usa as cotações disponíveis no app; não é dinheiro disponível.')
+                                            'Saldo atual + receitas previstas − compromissos cadastrados, incluindo atrasados e faturas após pagamentos parciais. O gasto do dia a dia só entra se você ligar a opção acima, como estimativa: o da conta sai todo dia e o do cartão entra na fatura do ciclo. O valor por dia é o menor saldo de cada dia dividido pelos dias até ele, sem o gasto do dia a dia. Usa as cotações disponíveis no app; não é dinheiro disponível.')
                                       ]),
                                   for (final warning in forecast.warnings)
                                     Padding(
@@ -299,7 +351,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
                                     if (event.kind != 'closing')
                                       Text(app.settings.hideBalance
                                           ? '••••'
-                                          : '${event.amount >= 0 ? '+' : '−'} ${formatAmount(event.amount.abs(), event.currency)}'),
+                                          : '${event.amount >= 0 ? '+' : '−'} ${formatAmount(event.amount.abs(), event.currency)}${event.estimated != 0 ? ' (inclui ${formatAmount(event.estimated.abs(), event.currency)} estimado)' : ''}'),
                                     Wrap(spacing: 8, children: [
                                       TextButton(
                                           onPressed: _busy

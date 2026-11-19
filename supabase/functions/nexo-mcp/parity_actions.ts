@@ -10,7 +10,7 @@ import {
 import { balanceCents, callTool, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { envelopeById, envelopes, spendingTypes } from "./envelopes.ts";
 import { checkSetting, settingDefs, sharedSettings } from "./settings.ts";
-import { cardInvoices, occurrences } from "./invoices.ts";
+import { cardInvoices, cycleFor, occurrences } from "./invoices.ts";
 import { reconcileAccount } from "./inbox.ts";
 import { FX_SCALE, lastRate, ratio } from "./portfolio.ts";
 import { toMovement } from "./inbox.ts";
@@ -307,8 +307,9 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
   },
   {
     name: "get_cash_projection", title: "Projeção de caixa até uma data",
-    description: "Saldo das contas hoje + receitas e despesas recorrentes previstas + contas pendentes + faturas que vencem até a data. Estimativa explicada item a item.",
-    inputSchema: obj({ until: dateField }, ["until"]),
+    description: "Saldo das contas hoje + receitas e despesas recorrentes previstas + contas pendentes + faturas que vencem até a data. Estimativa explicada item a item. Devolve safe_per_day: quanto dá para gastar por dia, a partir de amanhã, sem ficar negativo até a data. Com daily_spending (\"average\" = média das últimas 4 semanas, à vista e no cartão separados; ou um valor por dia em reais), inclui o gasto do dia a dia como estimativa.",
+    inputSchema: obj({ until: dateField,
+      daily_spending: { description: '"average" ou um valor por dia em reais (gasto à vista).', anyOf: [{ type: "string", enum: ["average"] }, { type: "number", minimum: 0 }] } }, ["until"]),
   },
   {
     name: "get_spending_breakdown", title: "Consumo agrupado",
@@ -347,6 +348,35 @@ function bool(v: unknown, key: string): boolean | undefined {
   return v;
 }
 const find = (rows: Row[] | undefined, id: unknown) => (rows ?? []).find((r) => text(r.id) === id);
+
+/// Day-to-day spending per day, in cents: the last 28 days before today,
+/// apart for the accounts and each card. Real spending only (no neutral,
+/// recurring, installments, one-off or pending). Same rule as the app's
+/// DailySpending.average (lib/services/daily_spending.dart).
+function dailyAverage(l: Ledger, today: string) {
+  const from = addDays(today, -28);
+  const metas = metadataIndex(l);
+  let cash = 0;
+  const cards = new Map<string, number>();
+  for (const t of l.transactions) {
+    if (t.type !== "expense") continue;
+    const d = day(text(t.date));
+    if (d < from || d >= today) continue;
+    const a = find(l.accounts, t.account_id);
+    if (!a || a.exclude_from_total === 1 || a.type === "gold" || currencyOf(l, t) !== l.mainCurrency) continue;
+    const m = meta(metas.get(text(t.id)));
+    if (m.status === "pending" || m.expenseClass === "extraordinary" || m.source === "recurring" ||
+      m.source === "installment" || m.installmentTotal != null) continue;
+    if (text(t.id).startsWith("recurring:") || isNeutral(t, m)) continue;
+    if (a.type === "credit") cards.set(text(a.id), (cards.get(text(a.id)) ?? 0) + cents(num(t.amount)));
+    else cash += cents(num(t.amount));
+  }
+  return {
+    cash: Math.round(cash / 28),
+    cards: new Map([...cards].map(([id, v]) => [id, Math.round(v / 28)] as [string, number]).filter(([, v]) => v > 0)),
+  };
+}
+
 function account(l: Ledger, id: unknown, noCredit = false) {
   const a = find(l.accounts, id);
   if (!a) throw new ToolInputError("Conta não encontrada. Use get_accounts.");
@@ -1216,15 +1246,22 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       };
     }
     case "get_cash_projection": {
-      only(args, ["until"]);
+      only(args, ["until", "daily_spending"]);
       const until = dateArg(args.until, "until");
       if (until <= today) throw new ToolInputError("until deve ser depois de hoje.");
       if (until > addDays(today, 400)) throw new ToolInputError("Projete no máximo 400 dias.");
+      const asked = args.daily_spending;
+      if (asked !== undefined && asked !== "average" &&
+        (typeof asked !== "number" || !Number.isFinite(asked) || asked < 0 || asked > 1_000_000)) {
+        throw new ToolInputError('daily_spending deve ser "average" ou um valor por dia em reais.');
+      }
+      const daily = asked === undefined ? null
+        : asked === "average" ? dailyAverage(l, today) : { cash: cents(asked), cards: new Map<string, number>() };
       const credit = new Set(l.accounts.filter((a) => a.type === "credit").map((a) => text(a.id)));
       const main = l.accounts.filter((a) => a.type !== "credit" && a.type !== "gold" && a.exclude_from_total !== 1 &&
         text(a.currency) === l.mainCurrency);
       const start = main.reduce((s, a) => s + balanceCents(l, text(a.id)), 0);
-      const items: { date: string; what: string; amount: number }[] = [];
+      const items: { date: string; what: string; amount: number; estimate?: number }[] = [];
       for (const r of l.recurring) {
         if (credit.has(text(r.account_id))) continue; // card bills arrive through the invoice
         if (!main.some((a) => a.id === r.account_id)) continue;
@@ -1256,30 +1293,68 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           leftOut.push(`Fatura ${card.card}: paga por conta fora do saldo disponível.`);
           continue;
         }
-        for (const inv of card.invoices) {
-          const owed = cents(inv.expected_remaining ?? inv.remaining);
-          if (!inv.due_date || inv.due_date > until || owed <= 0) continue;
-          const late = inv.due_date < today;
-          items.push({
-            date: late ? today : inv.due_date,
-            what: `Fatura ${card.card} (${late ? "venceu em" : "vence"} ${inv.due_date}${inv.expected_recurring ? `, com ${money(cents(inv.expected_recurring))} de recorrentes previstas` : ""})`,
-            amount: -owed,
-          });
+        // The card's day-to-day average, from tomorrow, in the invoice of
+        // each day's cycle.
+        const estimated = new Map<string, { due: string | null; cents: number }>();
+        const perDay = daily?.cards.get(card.card_id) ?? 0;
+        for (let d = addDays(today, 1); perDay > 0 && d <= until; d = addDays(d, 1)) {
+          const c = cycleFor(d, card.closing_day ?? null, card.due_day ?? null);
+          const e = estimated.get(c.end) ?? estimated.set(c.end, { due: c.due, cents: 0 }).get(c.end)!;
+          e.cents += perDay;
         }
+        const invoiceItem = (due: string, entered: number, extra: number, recurring?: number) => {
+          const owed = Math.max(entered + extra, 0);
+          if (due > until || owed <= 0) return;
+          const late = due < today;
+          items.push({
+            date: late ? today : due,
+            what: `Fatura ${card.card} (${late ? "venceu em" : "vence"} ${due}${recurring ? `, com ${money(recurring)} de recorrentes previstas` : ""}${extra ? `, com ${money(Math.min(extra, owed))} de gasto do dia a dia estimado` : ""})`,
+            amount: -owed,
+            estimate: extra ? -Math.min(extra, owed) : undefined,
+          });
+        };
+        for (const inv of card.invoices) {
+          const extra = estimated.get(inv.closing_date)?.cents ?? 0;
+          estimated.delete(inv.closing_date);
+          if (!inv.due_date) continue;
+          const planned = inv.expected_recurring ? cents(inv.expected_recurring) : 0;
+          invoiceItem(inv.due_date, cents(inv.total) + planned - cents(inv.paid), extra, planned || undefined);
+        }
+        for (const e of estimated.values()) if (e.due) invoiceItem(e.due, 0, e.cents);
       }
       items.sort((a, b) => a.date.localeCompare(b.date));
-      let running = start, lowest = start, lowestDate = today;
-      const timeline = items.map((i) => {
-        running += i.amount;
-        if (running < lowest) { lowest = running; lowestDate = i.date; }
-        return { date: i.date, what: i.what, amount: money(i.amount), balance_after: money(running) };
-      });
+      // Day by day: the day-to-day spending of the account leaves from
+      // tomorrow; the safe amount per day uses the balance without it.
+      const cashPerDay = daily?.cash ?? 0;
+      let running = start, base = start, lowest = start, lowestDate = today, next = 0, n = 0, estimatedTotal = 0;
+      let safe: number | null = null;
+      const timeline: Record<string, unknown>[] = [];
+      for (let d = today; d <= until; d = addDays(d, 1)) {
+        if (d > today) { running -= cashPerDay; estimatedTotal += cashPerDay; n++; }
+        for (; next < items.length && items[next].date <= d; next++) {
+          const i = items[next];
+          running += i.amount;
+          base += i.amount - (i.estimate ?? 0);
+          estimatedTotal -= i.estimate ?? 0;
+          timeline.push({ date: i.date, what: i.what, amount: money(i.amount), balance_after: money(running),
+            estimated: i.estimate ? money(-i.estimate) : undefined });
+        }
+        if (running < lowest) { lowest = running; lowestDate = d; }
+        if (n > 0 && (safe === null || base / n < safe)) safe = base / n;
+      }
       return {
         from: today, until, starting_cash: money(start), ending_cash: money(running),
         lowest_point: { balance: money(lowest), date: lowestDate },
+        safe_per_day: money(safe === null || safe <= 0 ? 0 : Math.floor(safe + 1e-6)),
+        daily_spending: daily ? {
+          basis: asked === "average" ? "média diária das últimas 4 semanas, sem recorrentes, parcelas, gastos pontuais e neutros" : "valor informado",
+          account_per_day: money(daily.cash),
+          cards_per_day: daily.cards.size ? [...daily.cards].map(([id, v]) => ({ card_id: id, per_day: money(v) })) : undefined,
+          estimated_total: money(estimatedTotal),
+        } : undefined,
         timeline: timeline.slice(0, 120), truncated: timeline.length > 120 ? timeline.length : undefined,
         left_out: leftOut.length ? leftOut : undefined,
-        note: "Estimativa: contas em reais que entram no total, sem cartões e ouro. Cada fatura que vence até a data entra no vencimento, com as parcelas já lançadas e as recorrentes do cartão no ciclo certo. Gastos variáveis do dia a dia não estão incluídos.",
+        note: `Estimativa: contas em reais que entram no total, sem cartões e ouro. Cada fatura que vence até a data entra no vencimento, com as parcelas já lançadas e as recorrentes do cartão no ciclo certo. ${daily ? "O gasto do dia a dia é estimado: sai da conta todo dia a partir de amanhã, e o do cartão entra na fatura do ciclo (não aparece item a item na lista)." : "Gastos variáveis do dia a dia não estão incluídos (peça daily_spending)."} safe_per_day é quanto dá para gastar por dia, a partir de amanhã, sem o saldo ficar negativo em nenhum dia até a data.`,
       };
     }
     case "get_spending_breakdown": {
