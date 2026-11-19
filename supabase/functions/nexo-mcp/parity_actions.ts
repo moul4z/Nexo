@@ -1240,12 +1240,22 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         if (text(t.id).startsWith("recurring:")) continue;
         const due = day(m.dueDate ?? text(t.date));
         if (due > until) continue;
-        items.push({ date: due, what: `${text(t.description)} (pendente)`, amount: (t.type === "income" ? 1 : -1) * cents(num(t.amount)) });
+        items.push({ date: due < today ? today : due, what: `${text(t.description)} (pendente${due < today ? `, venceu em ${due}` : ""})`,
+          amount: (t.type === "income" ? 1 : -1) * cents(num(t.amount)) });
       }
       // Every invoice up to the day asked: what is entered (installments
       // included) plus the recurring charges of the card, in their cycle.
+      const leftOut: string[] = [];
       for (const card of cardInvoices(l, today, undefined, false, { future: 14, planUntil: until }).cards) {
-        if (find(l.accounts, card.card_id)?.exclude_from_total === 1) continue;
+        const account = find(l.accounts, card.card_id);
+        if (account?.exclude_from_total === 1) continue;
+        // Paid from an account kept out of the available balance: like the
+        // app, it does not leave the cash.
+        const payer = find(l.accounts, account?.linked_account_id);
+        if (payer && (payer.type === "credit" || payer.type === "gold" || payer.exclude_from_total === 1)) {
+          leftOut.push(`Fatura ${card.card}: paga por conta fora do saldo disponível.`);
+          continue;
+        }
         for (const inv of card.invoices) {
           const owed = cents(inv.expected_remaining ?? inv.remaining);
           if (!inv.due_date || inv.due_date > until || owed <= 0) continue;
@@ -1268,6 +1278,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         from: today, until, starting_cash: money(start), ending_cash: money(running),
         lowest_point: { balance: money(lowest), date: lowestDate },
         timeline: timeline.slice(0, 120), truncated: timeline.length > 120 ? timeline.length : undefined,
+        left_out: leftOut.length ? leftOut : undefined,
         note: "Estimativa: contas em reais que entram no total, sem cartões e ouro. Cada fatura que vence até a data entra no vencimento, com as parcelas já lançadas e as recorrentes do cartão no ciclo certo. Gastos variáveis do dia a dia não estão incluídos.",
       };
     }

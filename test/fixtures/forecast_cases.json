@@ -1,0 +1,133 @@
+{
+  "about": "Casos da previsão de caixa, com nomes e valores fictícios. CashForecast.calculate (lib/services/cash_forecast.dart) e get_cash_projection (supabase/functions/nexo-mcp/parity_actions.ts) precisam dar exatamente estes movimentos: dia (o que está atrasado entra hoje) e valor em centavos, com o saldo inicial e o final. Contas em reais.",
+  "cases": [
+    {
+      "name": "P1 conta: aluguel e salário recorrentes, pendente com vencimento",
+      "today": "2026-11-20",
+      "until": "2026-12-31",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000}
+      ],
+      "transactions": [
+        {"id": "luz", "type": "expense", "amount": 120, "accountId": "bank", "date": "2026-11-15", "status": "pending", "dueDate": "2026-11-28"}
+      ],
+      "recurring": [
+        {"id": "aluguel", "name": "Aluguel", "accountId": "bank", "amount": 800, "type": "expense", "nextDate": "2026-12-05", "startDate": "2026-01-05"},
+        {"id": "salario", "name": "Salário", "accountId": "bank", "amount": 3000, "type": "income", "nextDate": "2026-12-01", "startDate": "2026-01-01"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 308000,
+        "events": [["2026-11-28", -12000], ["2026-12-01", 300000], ["2026-12-05", -80000]]
+      }
+    },
+    {
+      "name": "P2 recorrente atrasada entra hoje; as seguintes, no dia",
+      "today": "2026-11-20",
+      "until": "2026-12-15",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 500}
+      ],
+      "recurring": [
+        {"id": "academia", "name": "Academia", "accountId": "bank", "amount": 99.9, "type": "expense", "nextDate": "2026-11-10", "startDate": "2026-01-10"}
+      ],
+      "expect": {
+        "start": 50000,
+        "end": 30020,
+        "events": [["2026-11-20", -9990], ["2026-12-10", -9990]]
+      }
+    },
+    {
+      "name": "P3 cartão: compra e assinatura na fatura do próprio ciclo, fatura fechada paga em parte",
+      "today": "2026-11-20",
+      "until": "2026-12-31",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 2000},
+        {"id": "card", "type": "credit", "balance": 0, "statementDay": 19, "dueDay": 26, "linkedAccountId": "bank"}
+      ],
+      "transactions": [
+        {"id": "mercado", "type": "expense", "amount": 200, "accountId": "card", "date": "2026-11-15"},
+        {"id": "farmacia", "type": "expense", "amount": 100, "accountId": "card", "date": "2026-11-21"}
+      ],
+      "recurring": [
+        {"id": "musica", "name": "Música Exemplo", "accountId": "card", "amount": 21.9, "type": "expense", "nextDate": "2026-12-02", "startDate": "2026-01-02"}
+      ],
+      "invoicePayments": [
+        {"card_id": "card", "cycle_end": "2026-11-19", "amount": 50}
+      ],
+      "expect": {
+        "start": 200000,
+        "end": 172810,
+        "events": [["2026-11-26", -15000], ["2026-12-26", -12190]]
+      }
+    },
+    {
+      "name": "P4 conta fora do total e ouro não entram no caixa",
+      "today": "2026-11-20",
+      "until": "2026-12-31",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000},
+        {"id": "reserva", "type": "bank", "balance": 5000, "excludeFromTotal": true},
+        {"id": "ouro", "type": "gold", "balance": 3000}
+      ],
+      "recurring": [
+        {"id": "aporte", "name": "Aporte", "accountId": "reserva", "amount": 100, "type": "expense", "nextDate": "2026-12-01", "startDate": "2026-01-01"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 100000,
+        "events": []
+      }
+    },
+    {
+      "name": "P5 parcelamento termina antes do fim do período",
+      "today": "2026-11-20",
+      "until": "2027-02-28",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000}
+      ],
+      "recurring": [
+        {"id": "notebook", "name": "Notebook", "accountId": "bank", "amount": 250, "type": "expense", "nextDate": "2026-12-10", "startDate": "2026-09-10", "endDate": "2027-01-10", "kind": "installment"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 50000,
+        "events": [["2026-12-10", -25000], ["2027-01-10", -25000]]
+      }
+    },
+    {
+      "name": "P6 conta pendente já vencida entra hoje",
+      "today": "2026-11-20",
+      "until": "2026-12-15",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000}
+      ],
+      "transactions": [
+        {"id": "iptu", "type": "expense", "amount": 300, "accountId": "bank", "date": "2026-11-01", "status": "pending", "dueDate": "2026-11-10"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 70000,
+        "events": [["2026-11-20", -30000]]
+      }
+    },
+    {
+      "name": "P7 fatura paga por conta fora do total não sai do caixa",
+      "today": "2026-11-20",
+      "until": "2026-12-31",
+      "accounts": [
+        {"id": "bank", "type": "bank", "balance": 1000},
+        {"id": "reserva", "type": "bank", "balance": 5000, "excludeFromTotal": true},
+        {"id": "card", "type": "credit", "balance": 0, "statementDay": 19, "dueDay": 26, "linkedAccountId": "reserva"}
+      ],
+      "transactions": [
+        {"id": "loja", "type": "expense", "amount": 100, "accountId": "card", "date": "2026-11-15"}
+      ],
+      "expect": {
+        "start": 100000,
+        "end": 100000,
+        "events": []
+      }
+    }
+  ]
+}

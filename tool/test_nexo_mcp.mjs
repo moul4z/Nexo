@@ -898,6 +898,39 @@ const scenario = {
 };
 const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.deps);
 
+// The same cases as test/forecast_cases_test.dart: the app's forecast and
+// get_cash_projection must give the same movements, day by day.
+{
+  const cases = JSON.parse(await readFile(new URL('../test/fixtures/forecast_cases.json', import.meta.url), 'utf8')).cases;
+  const ledger = (c) => ({
+    mainCurrency: 'BRL',
+    accounts: c.accounts.map((a) => ({ id: a.id, name: a.id, type: a.type, currency: 'BRL',
+      statement_day: a.statementDay ?? null, due_day: a.dueDay ?? null, linked_account_id: a.linkedAccountId ?? null,
+      exclude_from_total: a.excludeFromTotal ? 1 : 0 })),
+    balances: Object.fromEntries(c.accounts.map((a) => [a.id, Math.round(a.balance * 1e6)])),
+    categories: [], investments: [], investmentOperations: [],
+    transactions: (c.transactions ?? []).map((t) => ({ id: t.id, type: t.type, amount: t.amount, description: t.id,
+      account_id: t.accountId, category_id: '', date: `${t.date}T12:00:00.000`, note: '' })),
+    metadata: (c.transactions ?? []).filter((t) => t.status).map((t) => ({ transaction_id: t.id, status: t.status,
+      due_date: t.dueDate ? `${t.dueDate}T00:00:00.000` : null })),
+    recurring: (c.recurring ?? []).map((r) => ({ id: r.id, name: r.name, payment_type: r.type, amount: r.amount,
+      next_date: `${r.nextDate}T00:00:00.000`, start_date: `${r.startDate}T00:00:00.000`,
+      end_date: r.endDate ? `${r.endDate}T00:00:00.000` : null, account_id: r.accountId, category_id: '',
+      freq_val: r.freqVal ?? 1, freq_unit: r.freqUnit ?? 'months', recurring_type: r.kind ?? 'subscription' })),
+    invoicePayments: (c.invoicePayments ?? []).map((p, i) => ({ id: `p${i}`, ...p, paid_at: `${c.today}T12:00:00.000` })),
+  });
+  for (const c of cases) {
+    await test(`forecast fixture: ${c.name}`, async () => {
+      const out = await callAction('get_cash_projection', { until: c.until }, ledger(c), c.today, smartQueue().deps);
+      const got = out.timeline.map((t) => [t.date, Math.round(t.amount * 100)]).sort((a, b) => a[0].localeCompare(b[0]) || a[1] - b[1]);
+      const want = [...c.expect.events].sort((a, b) => a[0].localeCompare(b[0]) || a[1] - b[1]);
+      assert.deepEqual(got, want);
+      assert.equal(Math.round(out.starting_cash * 100), c.expect.start);
+      assert.equal(Math.round(out.ending_cash * 100), c.expect.end);
+    });
+  }
+}
+
 await test('rules: transfer, internal and "register by itself", asked through the connector', async () => {
   const q = smartQueue();
   await pact(q, 'save_import_rule', { pattern: 'IFOOD', category_id: 'delivery' });
