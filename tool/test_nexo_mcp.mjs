@@ -946,6 +946,20 @@ const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.
   }
 }
 
+await test('suggested limit: median of the 3 closed months, rounded up to 10; real spending only', async () => {
+  const { suggestedLimitCents } = await import('../supabase/functions/nexo-mcp/more_actions.ts');
+  const row = (id, amount, date, extra = {}) => ({ id, type: 'expense', amount, description: id, account_id: 'main',
+    category_id: 'mercado', date: `${date}T12:00:00.000`, note: '', ...extra });
+  const l = { ...scenario, transactions: [
+    row('ago', 1200, '2026-08-10'), row('set', 380, '2026-09-12'), row('out', 400.5, '2026-10-03'),
+    row('out-tv', 3000, '2026-10-05'), row('out-pend', 99, '2026-10-06'), row('nov', 999, '2026-11-02'),
+  ], metadata: [
+    { transaction_id: 'out-tv', expense_class: 'extraordinary' },
+    { transaction_id: 'out-pend', status: 'pending' },
+  ] };
+  assert.equal(suggestedLimitCents(l, 'mercado', '2026-11-20'), 41000, 'median 400,50 → 410');
+  assert.equal(suggestedLimitCents(l, 'bar', '2026-11-20'), null);
+});
 await test('simulate_cash: nothing asked of the app, events checked; the card interest goes through update_account', async () => {
   const q = smartQueue();
   const bad = [

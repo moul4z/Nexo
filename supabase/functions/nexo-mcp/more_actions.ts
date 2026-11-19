@@ -10,6 +10,27 @@ import { sharedSettings } from "./settings.ts";
 type Args = Record<string, unknown>;
 type Enqueue = (kind: string, args: Record<string, unknown>) => Promise<{ id: string; status: string }>;
 
+/// A monthly limit to suggest: the median of the real spending of the
+/// category in the last three closed months (no one-off, neutral or
+/// pending entries), rounded up to the next 10. Same rule as the app's
+/// SuggestedLimit (lib/services/suggested_limit.dart).
+export function suggestedLimitCents(l: Ledger, categoryId: string, today: string): number | null {
+  const [y, m] = today.split("-").map(Number);
+  const months = [1, 2, 3].map((i) => new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7));
+  const totals = [0, 0, 0];
+  const metas = metadataIndex(l);
+  for (const t of l.transactions) {
+    if (t.type !== "expense" || t.category_id !== categoryId) continue;
+    const md = meta(metas.get(text(t.id)));
+    if (md.status === "pending" || md.expenseClass === "extraordinary" || isNeutral(t, md) ||
+      currencyOf(l, t) !== l.mainCurrency) continue;
+    const i = months.indexOf(day(text(t.date)).slice(0, 7));
+    if (i >= 0) totals[i] += cents(num(t.amount));
+  }
+  totals.sort((a, b) => a - b);
+  return totals[1] > 0 ? Math.ceil(totals[1] / 1000) * 1000 : null;
+}
+
 const dateField = { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" };
 const amountField = { type: "number", exclusiveMinimum: 0, maximum: 1000000000, description: "Valor em reais" };
 const idField = { type: "string" };
@@ -569,10 +590,14 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
             variable_limit: rule && {
               base: money(rule.base), percent: rule.percent, earned: money(rule.earned), profit: money(rule.profit),
             },
+            suggested: (() => {
+              const s = suggestedLimitCents(l, text(b.category_id), today);
+              return s === null ? undefined : money(s);
+            })(),
           };
         }),
         week_starts_on: weekStart === "sunday" ? "domingo" : "segunda",
-        note: "Inclui gastos pendentes do período, como no app. Orçamento criado no meio do período conta desde a criação, com limite proporcional (counts_from, full_limit). Para valer cheio, use update_budget com full_period true.",
+        note: "Inclui gastos pendentes do período, como no app. Orçamento criado no meio do período conta desde a criação, com limite proporcional (counts_from, full_limit). Para valer cheio, use update_budget com full_period true. suggested é só uma sugestão de limite mensal: a mediana do gasto real dos 3 últimos meses fechados, arredondada para cima; nunca é aplicada sozinha.",
       };
     }
     case "set_budget": {

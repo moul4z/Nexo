@@ -1,6 +1,7 @@
 // lib/screens/budget_screen.dart
 import 'package:flutter/material.dart';
 import 'envelopes_sheet.dart';
+import '../services/suggested_limit.dart';
 import '../l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
@@ -748,6 +749,31 @@ class _BudgetSheetState extends State<_BudgetSheet> {
               ),
               onChanged: (_) => setState(() {}),
             ),
+            if (_categoryId != null && _period == 'monthly')
+              Builder(builder: (_) {
+                final suggested = SuggestedLimit.monthly(
+                    categoryId: _categoryId!,
+                    now: DateTime.now(),
+                    transactions: app.transactions,
+                    metadata: app.transactionMetadata,
+                    toMain: (t) => app.convertToMain(
+                        t.amount,
+                        t.currency.isNotEmpty
+                            ? t.currency
+                            : app.accountById(t.accountId)?.currency ??
+                                app.settings.currency));
+                if (suggested == null) return const SizedBox.shrink();
+                return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: ActionChip(
+                        avatar: const Icon(Icons.lightbulb_outline, size: 18),
+                        label: Text(
+                            'Sugestão: ${formatAmount(suggested, app.settings.currency)} (mediana dos 3 últimos meses)'),
+                        onPressed: () => setState(() => _amtCtrl.text =
+                            suggested
+                                .toStringAsFixed(2)
+                                .replaceAll('.', ','))));
+              }),
             const SizedBox(height: 16),
 
             // Period selector
