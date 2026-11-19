@@ -459,8 +459,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   final total = spent.expense + spent.pendingExpense;
                   return ListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: Text(
-                          app.categoryById(b.categoryId)?.name ?? 'Categoria'),
+                      title: Text(app.budgetName(b)),
                       subtitle: Text(
                           '${money(total)} / ${money(b.amount)} • ${total > b.amount ? 'Excedido' : 'Restante'} ${money((b.amount - total).abs())}'),
                       onTap: () => openAnalysisEntries(

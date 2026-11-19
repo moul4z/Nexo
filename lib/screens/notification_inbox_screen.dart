@@ -1,3 +1,4 @@
+import '../services/subcategories.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -1169,7 +1170,10 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
             widget.suggestedCategory ??
             CategoryMemory.fromTransactions(app.transactions)
                 .suggest(description.text, type: type);
-        subcategory.text = rule?.subcategory ?? '';
+        subcategory.text = rule?.subcategory ??
+            (category == 'food_exp'
+                ? foodSubcategory(description.text) ?? ''
+                : '');
         if (type == 'transfer') {
           account =
               usable(widget.row['from_account_id']) ?? (incoming ? other : own);
@@ -1509,7 +1513,16 @@ class _SuggestionReviewScreenState extends State<SuggestionReviewScreen> {
                     .map((c) =>
                         DropdownMenuItem(value: c.id, child: Text(c.name)))
                     .toList(),
-                onChanged: busy ? null : (v) => setState(() => category = v)),
+                onChanged: busy
+                    ? null
+                    : (v) => setState(() {
+                          category = v;
+                          // Delivery or Mercado, shown here to change.
+                          if (v == 'food_exp' && subcategory.text.isEmpty) {
+                            subcategory.text =
+                                foodSubcategory(description.text) ?? '';
+                          }
+                        })),
             TextField(
                 controller: subcategory,
                 decoration: const InputDecoration(

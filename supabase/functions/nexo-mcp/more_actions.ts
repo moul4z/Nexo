@@ -14,7 +14,7 @@ type Enqueue = (kind: string, args: Record<string, unknown>) => Promise<{ id: st
 /// category in the last three closed months (no one-off, neutral or
 /// pending entries), rounded up to the next 10. Same rule as the app's
 /// SuggestedLimit (lib/services/suggested_limit.dart).
-export function suggestedLimitCents(l: Ledger, categoryId: string, today: string): number | null {
+export function suggestedLimitCents(l: Ledger, categoryId: string, today: string, subcategory = ""): number | null {
   const [y, m] = today.split("-").map(Number);
   const months = [1, 2, 3].map((i) => new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7));
   const totals = [0, 0, 0];
@@ -23,7 +23,7 @@ export function suggestedLimitCents(l: Ledger, categoryId: string, today: string
     if (t.type !== "expense" || t.category_id !== categoryId) continue;
     const md = meta(metas.get(text(t.id)));
     if (md.status === "pending" || md.expenseClass === "extraordinary" || isNeutral(t, md) ||
-      currencyOf(l, t) !== l.mainCurrency) continue;
+      currencyOf(l, t) !== l.mainCurrency || (subcategory && md.subcategory !== subcategory)) continue;
     const i = months.indexOf(day(text(t.date)).slice(0, 7));
     if (i >= 0) totals[i] += cents(num(t.amount));
   }
@@ -165,6 +165,7 @@ export const moreActions: (ToolDefinition & { destructive?: boolean })[] = [
         amount: amountField,
         period: { type: "string", enum: ["monthly", "weekly"], description: "Padrão monthly" },
         full_period: { type: "boolean" },
+        subcategory: { type: "string", maxLength: 40, description: "Opcional: limite só para uma subcategoria (ex.: Delivery em Alimentação); conta também no da categoria" },
       },
       required: ["category_id", "amount"],
       additionalProperties: false,
@@ -361,7 +362,10 @@ function budgetSpentCents(l: Ledger, b: Row, today: string, weekStart: string): 
     if (tx.type !== "expense" || text(tx.category_id) !== text(b.category_id)) continue;
     const date = day(text(tx.date));
     if (date < from || date >= to) continue;
-    if (isNeutral(tx, meta(metas.get(text(tx.id))))) continue;
+    const m = meta(metas.get(text(tx.id)));
+    // A subcategory's budget counts only its entries.
+    if (text(b.subcategory) && m.subcategory !== text(b.subcategory)) continue;
+    if (isNeutral(tx, m)) continue;
     if (currencyOf(l, tx) !== l.mainCurrency) continue;
     total += cents(num(tx.amount));
   }
@@ -577,8 +581,9 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
           const limit = rule?.limit ?? window.limitCents;
           return {
             id: text(b.id),
-            category: text(find(l.categories, b.category_id)?.name) || "Categoria",
+            category: (text(find(l.categories, b.category_id)?.name) || "Categoria") + (text(b.subcategory) ? ` › ${text(b.subcategory)}` : ""),
             category_id: text(b.category_id),
+            subcategory: text(b.subcategory) || undefined,
             period: text(b.period) === "weekly" ? "semanal" : "mensal",
             limit: money(limit),
             spent: money(spent),
@@ -591,7 +596,7 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
               base: money(rule.base), percent: rule.percent, earned: money(rule.earned), profit: money(rule.profit),
             },
             suggested: (() => {
-              const s = suggestedLimitCents(l, text(b.category_id), today);
+              const s = suggestedLimitCents(l, text(b.category_id), today, text(b.subcategory));
               return s === null ? undefined : money(s);
             })(),
           };
@@ -601,12 +606,19 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
       };
     }
     case "set_budget": {
-      only(args, ["category_id", "amount", "period", "full_period"]);
+      only(args, ["category_id", "amount", "period", "full_period", "subcategory"]);
       const c = category(l, str(args, "category_id", 256), "expense");
       const body: Args = {
         category_id: text(c.id), amount_cents: amountCents(args),
         period: enumArg(args, "period", ["monthly", "weekly"], "monthly"),
       };
+      const sub = str(args, "subcategory", 40, false)?.trim();
+      if (sub) {
+        // Only the newer request kind knows subcategories.
+        if (args.full_period !== undefined && typeof args.full_period !== "boolean") throw new ToolInputError("full_period deve ser verdadeiro ou falso.");
+        return pending((await enqueue("budget.save", { ...body, subcategory: sub,
+          ...(args.full_period !== undefined ? { full_period: args.full_period } : {}) })).id, "Orçamento da subcategoria");
+      }
       if (args.full_period !== undefined) {
         if (typeof args.full_period !== "boolean") throw new ToolInputError("full_period deve ser verdadeiro ou falso.");
         // Older apps do not know full_period: the newer request kind carries it.

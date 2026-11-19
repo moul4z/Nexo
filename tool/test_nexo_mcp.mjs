@@ -960,6 +960,24 @@ await test('suggested limit: median of the 3 closed months, rounded up to 10; re
   assert.equal(suggestedLimitCents(l, 'mercado', '2026-11-20'), 41000, 'median 400,50 → 410');
   assert.equal(suggestedLimitCents(l, 'bar', '2026-11-20'), null);
 });
+await test('budget of a subcategory: only its entries, the newer request kind and this app', async () => {
+  const q = smartQueue();
+  const l = { ...scenario,
+    transactions: [...scenario.transactions, tx('sacolao', 30, '2026-10-12', 'main', 'mercado')],
+    metadata: [...scenario.metadata, { transaction_id: 'sacolao', subcategory: 'Feira' }],
+    budgets: [...scenario.budgets, { id: 'b-feira', category_id: 'mercado', subcategory: 'Feira', amount: 50, period: 'monthly',
+      created_at: '2026-10-01T00:00:00.000' }] };
+  const out = await pact(q, 'get_budgets', {}, l);
+  const feira = out.budgets.find((b) => b.id === 'b-feira');
+  assert.equal(feira.spent, 30, 'only the entries of the subcategory');
+  assert.match(feira.category, /› Feira$/);
+  await pact(q, 'set_budget', { category_id: 'mercado', amount: 60, subcategory: 'Feira' }, l);
+  assert.equal(q.items.at(-1).kind, 'budget.save');
+  assert.equal(q.items.at(-1).args.subcategory, 'Feira');
+  const { minBuildFor } = await import('../supabase/functions/nexo-mcp/queue.ts');
+  assert.equal(minBuildFor('budget.save', q.items.at(-1).args), 61);
+  assert.equal(minBuildFor('budget.save', { category_id: 'mercado', amount_cents: 100 }), null);
+});
 await test('simulate_cash: nothing asked of the app, events checked; the card interest goes through update_account', async () => {
   const q = smartQueue();
   const bad = [

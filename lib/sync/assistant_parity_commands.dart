@@ -321,10 +321,13 @@ class AssistantParityCommands {
         if (!['monthly', 'weekly'].contains(period)) {
           throw ArgumentError('Período inválido.');
         }
+        final sub = (a['subcategory'] as String? ?? '').trim();
         final existing = a['id'] != null
             ? (app.budgets.where((b) => b.id == a['id']).firstOrNull ??
                 (throw StateError('O orçamento não existe mais.')))
-            : app.budgetForCategory(c.id);
+            : app.budgets
+                .where((b) => b.categoryId == c.id && b.subcategory == sub)
+                .firstOrNull;
         final now = DateTime.now();
         // "Cheio" counts the whole current period: the budget starts on its
         // first day. Otherwise it keeps its date (or starts today, if new).
@@ -349,6 +352,7 @@ class AssistantParityCommands {
             categoryId: c.id,
             amount: _reais(a['amount_cents'] ?? (existing!.amount * 100)),
             period: period,
+            subcategory: existing?.subcategory ?? sub,
             createdAt: created);
         if (existing != null) {
           await app.updateBudget(budget);

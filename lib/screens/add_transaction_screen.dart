@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../providers/app_provider.dart';
+import '../services/subcategories.dart';
 import '../services/transaction_metadata_service.dart';
 import '../services/finance_rules.dart';
 import '../theme/app_theme.dart';
@@ -292,37 +293,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     return labels[category.id] ?? category.name;
   }
 
-  List<String> _subcategories(String? categoryId) {
-    const values = <String, List<String>>{
-      'food_exp': ['Mercado', 'Lanche', 'Restaurante', 'Delivery'],
-      'transport': [
-        'Combustível',
-        'Transporte por app',
-        'Ônibus/Metrô',
-        'Manutenção',
-        'Estacionamento',
-      ],
-      'shopping': ['Roupas', 'Eletrônicos', 'Casa', 'Pessoal', 'Outros'],
-      'bills': [
-        'Água',
-        'Luz',
-        'Internet',
-        'Telefone',
-        'Assinaturas',
-        'Aluguel'
-      ],
-      'health': ['Farmácia', 'Consulta', 'Exames', 'Academia'],
-      'entertainment': ['Streaming', 'Cinema', 'Jogos', 'Passeio'],
-      'education': ['Faculdade', 'Cursos', 'Livros', 'Material'],
-      'other_exp': ['Outros'],
-      'salary': ['Salário'],
-      'freelance': ['Freelance', 'Bônus', 'Reembolso', 'Outros'],
-      'business': ['Negócios'],
-      'investment': ['Rendimentos', 'Dividendos', 'Juros'],
-      'gift': ['Presente', 'Doação recebida'],
-    };
-    return values[categoryId] ?? const [];
-  }
+  List<String> _subcategories(String? categoryId) =>
+      defaultSubcategories(categoryId);
 
   void _usePast(AppProvider app, AppTransaction past) {
     final account = app.accountById(past.accountId);

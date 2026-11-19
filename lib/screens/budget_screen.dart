@@ -1,6 +1,8 @@
 // lib/screens/budget_screen.dart
 import 'package:flutter/material.dart';
 import 'envelopes_sheet.dart';
+import '../models/transaction_metadata.dart';
+import '../services/subcategories.dart';
 import '../services/suggested_limit.dart';
 import '../l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
@@ -190,7 +192,10 @@ class _BudgetSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final monthly = app.budgets.where((b) => b.period != 'weekly').toList();
+    // A subcategory's budget is part of its category's: counted once.
+    final monthly = app.budgets
+        .where((b) => b.period != 'weekly' && !b.isSubcategory)
+        .toList();
     final over = app.budgets.where(app.budgetExceeded).length;
     final limit = monthly.fold(0.0, (s, b) => s + app.budgetLimit(b));
     final spent = monthly.fold(0.0, (s, b) => s + app.budgetSpent(b));
@@ -300,7 +305,7 @@ class _BudgetCard extends StatelessWidget {
     final alert = ratio >= .8 ? color : null;
     final remaining = limit - spent;
     final category = app.categoryById(budget.categoryId);
-    final name = category?.name ?? 'Categoria';
+    final name = app.budgetName(budget);
     final pace = budgetPace(budget, spent, now,
         weekStart: app.settings.weekStart, limit: limit);
     final projection = pace.projection;
@@ -621,6 +626,7 @@ class _BudgetSheet extends StatefulWidget {
 class _BudgetSheetState extends State<_BudgetSheet> {
   final _amtCtrl = TextEditingController();
   String? _categoryId;
+  String _subcategory = '';
   String _period = 'monthly';
   bool _submitted = false;
 
@@ -636,6 +642,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       final e = widget.existing!;
       _amtCtrl.text = e.amount.toStringAsFixed(2).replaceAll('.', ',');
       _categoryId = e.categoryId;
+      _subcategory = e.subcategory;
       _period = e.period;
     } else if (widget.categoryId != null) {
       _categoryId = widget.categoryId;
@@ -659,6 +666,39 @@ class _BudgetSheetState extends State<_BudgetSheet> {
     super.dispose();
   }
 
+  /// Shows what would change and changes only after a yes.
+  Future<void> _classify(
+      AppProvider app, List<(AppTransaction, String)> todo) async {
+    final delivery = todo.where((e) => e.$2 == 'Delivery').length;
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('Classificar antigos?'),
+                content: SingleChildScrollView(
+                    child: Text(
+                        '$delivery em Delivery e ${todo.length - delivery} em Mercado, pelo nome do estabelecimento. Só lançamentos de Alimentação sem subcategoria. Dá para mudar cada um depois.\n\n${todo.take(8).map((e) => '• ${e.$1.description} → ${e.$2}').join('\n')}${todo.length > 8 ? '\n…' : ''}')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancelar')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: Text('Classificar ${todo.length}')),
+                ]));
+    if (ok != true) return;
+    for (final (t, sub) in todo) {
+      final meta = app.transactionMetadata[t.id] ??
+          TransactionMetadata(transactionId: t.id);
+      await app.updateTransaction(t, t,
+          metadata: TransactionMetadata.fromMap(
+              {...meta.toMap(), 'subcategory': sub}));
+    }
+    if (mounted) {
+      showAppSnackbar(context, '${todo.length} lançamentos classificados.');
+      setState(() {});
+    }
+  }
+
   Future<void> _submit() async {
     setState(() => _submitted = true);
     final amount = parseMoney(_amtCtrl.text);
@@ -666,9 +706,14 @@ class _BudgetSheetState extends State<_BudgetSheet> {
     final app = context.read<AppProvider>();
     final l10n = AppLocalizations.of(context)!;
 
-    // Guard: if adding and category already has a budget, block it
-    if (!isEdit) {
-      final existing = app.budgetForCategory(_categoryId!);
+    // One budget per category and subcategory.
+    if (!isEdit ||
+        widget.existing!.categoryId != _categoryId ||
+        widget.existing!.subcategory != _subcategory) {
+      final existing = app.budgets
+          .where((b) =>
+              b.categoryId == _categoryId && b.subcategory == _subcategory)
+          .firstOrNull;
       if (existing != null) {
         if (!mounted) return;
         showAppSnackbar(context, l10n.budget_thisCategoryAlreadyH);
@@ -681,6 +726,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       categoryId: _categoryId!,
       amount: amount,
       period: _period,
+      subcategory: _subcategory,
       createdAt: isEdit
           ? widget.existing!.createdAt
           : _fullPeriod
@@ -753,6 +799,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
               Builder(builder: (_) {
                 final suggested = SuggestedLimit.monthly(
                     categoryId: _categoryId!,
+                    subcategory: _subcategory,
                     now: DateTime.now(),
                     transactions: app.transactions,
                     metadata: app.transactionMetadata,
@@ -839,8 +886,53 @@ class _BudgetSheetState extends State<_BudgetSheet> {
               CategoryChipPicker(
                 categories: expCats,
                 selectedId: _categoryId,
-                onSelected: (id) => setState(() => _categoryId = id),
+                onSelected: (id) => setState(() {
+                  _categoryId = id;
+                  _subcategory = '';
+                }),
               ),
+              const SizedBox(height: 12),
+              Builder(builder: (_) {
+                final used = {
+                  for (final t in app.transactions)
+                    if (t.categoryId == _categoryId)
+                      app.transactionMetadata[t.id]?.subcategory ?? ''
+                }..remove('');
+                final options = {
+                  ...defaultSubcategories(_categoryId),
+                  ...used,
+                  if (_subcategory.isNotEmpty) _subcategory
+                }.toList();
+                if (options.isEmpty) return const SizedBox.shrink();
+                return DropdownButtonFormField<String>(
+                    isExpanded: true,
+                    initialValue: _subcategory,
+                    decoration: const InputDecoration(
+                        labelText: 'Subcategoria (opcional)',
+                        helperText:
+                            'Um limite só para ela, que também conta no da categoria.',
+                        helperMaxLines: 2),
+                    items: [
+                      const DropdownMenuItem(
+                          value: '', child: Text('Toda a categoria')),
+                      for (final o in options)
+                        DropdownMenuItem(value: o, child: Text(o)),
+                    ],
+                    onChanged: (v) => setState(() => _subcategory = v ?? ''));
+              }),
+              if (_categoryId == 'food_exp')
+                Builder(builder: (_) {
+                  final todo = unclassifiedFood(
+                      app.transactions, app.transactionMetadata);
+                  if (todo.isEmpty) return const SizedBox.shrink();
+                  return Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                          icon: const Icon(Icons.auto_fix_high_outlined),
+                          label: Text(
+                              'Classificar antigos em Delivery ou Mercado (${todo.length})'),
+                          onPressed: () => _classify(app, todo)));
+                }),
               const SizedBox(height: 16),
             ],
 
@@ -852,6 +944,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                 final spent = app.budgetSpent(Budget(
                   id: '',
                   categoryId: _categoryId!,
+                  subcategory: _subcategory,
                   amount: parseMoney(_amtCtrl.text)!,
                   period: _period,
                   createdAt: DateTime.now(),

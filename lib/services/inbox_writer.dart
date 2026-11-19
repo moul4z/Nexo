@@ -1,3 +1,4 @@
+import 'subcategories.dart';
 import '../models/models.dart';
 import '../models/transaction_metadata.dart';
 import '../providers/app_provider.dart';
@@ -40,7 +41,11 @@ class AppInboxWriter implements InboxWriter {
         metadata: TransactionMetadata(
             transactionId: id,
             source: 'notification',
-            subcategory: subcategory),
+            // Food without a subcategory: Delivery or Mercado when the
+            // merchant makes it clear (visible and editable in the entry).
+            subcategory: subcategory.isEmpty && categoryId == 'food_exp'
+                ? foodSubcategory(description) ?? ''
+                : subcategory),
         generateInstallments: false,
         suggestionId: m.id);
     return id;

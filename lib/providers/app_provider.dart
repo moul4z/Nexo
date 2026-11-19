@@ -434,9 +434,7 @@ class AppProvider extends ChangeNotifier {
         final limit = budgetLimit(b);
         return {
           'hidden': hidden,
-          'category': hidden
-              ? 'Valores ocultos'
-              : categoryById(b.categoryId)?.name ?? 'Orçamento',
+          'category': hidden ? 'Valores ocultos' : budgetName(b),
           'spent': hidden ? 0.0 : spent,
           'amount': hidden ? 0.0 : limit,
           'progress': !hidden && limit > 0 ? spent / limit : 0.0,
@@ -2385,8 +2383,14 @@ class AppProvider extends ChangeNotifier {
     };
   }
 
-  Budget? budgetForCategory(String categoryId) =>
-      budgets.where((b) => b.categoryId == categoryId).firstOrNull;
+  /// "Alimentação" or "Alimentação › Delivery".
+  String budgetName(Budget b) =>
+      '${categoryById(b.categoryId)?.name ?? 'Categoria'}${b.isSubcategory ? ' › ${b.subcategory}' : ''}';
+
+  /// The budget of the whole category (not one of its subcategories).
+  Budget? budgetForCategory(String categoryId) => budgets
+      .where((b) => b.categoryId == categoryId && !b.isSubcategory)
+      .firstOrNull;
 
   /// Sum of all expenses for [budget]'s category in the current period,
   /// converted to the main currency.
@@ -2398,6 +2402,8 @@ class AppProvider extends ChangeNotifier {
         .where((t) =>
             t.type == 'expense' &&
             t.categoryId == budget.categoryId &&
+            (!budget.isSubcategory ||
+                transactionMetadata[t.id]?.subcategory == budget.subcategory) &&
             !FinanceRules.isNeutral(t, transactionMetadata[t.id]) &&
             t.date.isBefore(window.end) &&
             !t.date.isBefore(window.countsFrom))
@@ -2418,6 +2424,8 @@ class AppProvider extends ChangeNotifier {
 
   /// Base, profit and resulting limit of a budget with a variable limit.
   BudgetRuleResult? budgetRuleOf(Budget b) {
+    // A variable limit belongs to the category's own budget.
+    if (b.isSubcategory) return null;
     final rule = BudgetRule.fromJson(settings.budgetRules[b.categoryId]);
     if (rule == null) return null;
     final window =

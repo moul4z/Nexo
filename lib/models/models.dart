@@ -784,21 +784,33 @@ class Budget {
   final String period; // 'monthly' | 'weekly'
   final DateTime createdAt;
 
+  /// Empty: the whole category. Otherwise only the entries of that
+  /// subcategory, a part of the category's own budget.
+  final String subcategory;
+
   const Budget({
     required this.id,
     required this.categoryId,
     required this.amount,
     required this.period,
     required this.createdAt,
+    this.subcategory = '',
   });
 
-  Budget copyWith({String? categoryId, double? amount, String? period}) =>
+  bool get isSubcategory => subcategory.isNotEmpty;
+
+  Budget copyWith(
+          {String? categoryId,
+          double? amount,
+          String? period,
+          String? subcategory}) =>
       Budget(
         id: id,
         categoryId: categoryId ?? this.categoryId,
         amount: amount ?? this.amount,
         period: period ?? this.period,
         createdAt: createdAt,
+        subcategory: subcategory ?? this.subcategory,
       );
 
   Map<String, dynamic> toMap() => {
@@ -807,6 +819,7 @@ class Budget {
         'amount': amount,
         'period': period,
         'created_at': createdAt.toIso8601String(),
+        'subcategory': subcategory,
       };
 
   static Budget fromMap(Map<String, dynamic> m) => Budget(
@@ -817,6 +830,7 @@ class Budget {
         createdAt: m['created_at'] != null
             ? DateTime.parse(m['created_at'] as String)
             : DateTime.now(),
+        subcategory: (m['subcategory'] as String?) ?? '',
       );
 }
 

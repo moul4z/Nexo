@@ -2019,7 +2019,7 @@ class _BudgetRow extends StatelessWidget {
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(
-                  '${app.categoryById(budget.categoryId)?.name ?? 'Categoria'} · ${budget.period == 'weekly' ? 'semana' : 'mês'}',
+                  '${app.budgetName(budget)} · ${budget.period == 'weekly' ? 'semana' : 'mês'}',
                   style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
               Text(

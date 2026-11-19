@@ -24,6 +24,8 @@ export function minBuildFor(kind: string, args: Record<string, unknown>): number
   if (kind === "account.edit" && "interest_monthly_percent" in args) return RECURRING_BANK_BUILD;
   // An older app would count the broker's cash as available to spend.
   if (kind === "account.add" && args.type === "broker") return RECURRING_BANK_BUILD;
+  // An older app would make it a budget of the whole category.
+  if (kind === "budget.save" && typeof args.subcategory === "string" && args.subcategory) return RECURRING_BANK_BUILD;
   if (kind === "rule.save" && (args.auto === true || args.type === "transfer" || args.type === "internal")) {
     return RECONCILE_BUILD;
   }

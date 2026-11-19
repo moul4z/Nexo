@@ -353,7 +353,7 @@ class FinanceExportService {
       final budget = app.budgets[i];
       final spent = app.budgetSpent(budget);
       final values = [
-        app.categoryById(budget.categoryId)?.name ?? '',
+        app.budgetName(budget),
         budget.amount.toStringAsFixed(2),
         spent.toStringAsFixed(2),
         (budget.amount - spent).toStringAsFixed(2),
