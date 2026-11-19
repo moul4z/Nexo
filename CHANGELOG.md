@@ -8,6 +8,10 @@
 ### Conector
 - `confirm_suggestion` com `recurring_id` paga a recorrente pela cobrança do banco; `pay_recurring` com `transaction_id` liga a ocorrência a um lançamento que já existe (exigem esta versão do app).
 - `list_suggestions` deixa de mostrar o que o banco não mostra mais.
+### Segurança do conector
+- **O endereço do Claude vale 90 dias** e é renovado no app (Claude (IA) › ⋮ › Renovar por 90 dias), sem trocar o endereço no Claude. A lista mostra até quando vale e avisa nas duas últimas semanas. Os endereços que já existiam ganham 90 dias a partir da atualização do servidor.
+- **Limite de 120 chamadas por minuto:** acima disso o servidor pede para esperar e não lê nada.
+- Um pedido do acervo real não é lido por um conector de teste, nem o contrário.
 
 ## [1.18.0] - 2026-11-18
 ### Conciliação com o Open Finance

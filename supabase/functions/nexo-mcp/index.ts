@@ -70,10 +70,11 @@ const handler = createHandler({
   async authenticate(token) {
     const row = await rpc("nexo_mcp_authenticate", { p_token_hash: await sha256(token) }) as Row | null;
     if (!row || typeof row.id !== "string") return null;
-    return { id: row.id, ownerId: String(row.owner_id), datasetId: String(row.dataset_id) };
+    return { id: row.id, ownerId: String(row.owner_id), datasetId: String(row.dataset_id), limited: row.limited === true };
   },
   async tokenState(token) {
-    return await rpc("nexo_mcp_token_state", { p_token_hash: await sha256(token) }) as { state: string; revoked_at?: string } | null;
+    return await rpc("nexo_mcp_token_state", { p_token_hash: await sha256(token) }) as
+      { state: string; revoked_at?: string; expires_at?: string } | null;
   },
   async load(c: Connector): Promise<Ledger> {
     const data = await rpc("nexo_mcp_ledger", { p_connector_id: c.id }) as {

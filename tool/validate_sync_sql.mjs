@@ -1063,6 +1063,57 @@ try {
     await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [real.id]));
     await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [synthetic.id]));
   });
+  // ── 1.19, SEC-01 (minimal) and SEC-12 ──
+  const before = await connectorOf(A, audit.realId, 'Claude de antes');
+  await db.exec(await readFile(new URL('../supabase/migrations/202611200002_connector_limits.sql', import.meta.url), 'utf8'));
+  await test('SEC-01: an address lasts 90 days, is renewed in the app and is limited per minute; SEC-12: a request is read only from its dataset', async () => {
+    const day = 86400000;
+    const valid = async (id) => (await db.query('select expires_at from nexo_mcp_private.connectors where id = $1', [id])).rows[0].expires_at;
+    // An address made before the migration got 90 days from it.
+    assert.ok(Math.abs((await valid(before.id)).getTime() - Date.now() - 90 * day) < day);
+    await db.query(`update nexo_mcp_private.connectors set revoked_at = now() where owner_id = $1 and revoked_at is null`, [A]);
+    const made = await user(A, tx => rpc(tx, 'nexo_mcp_create_connector', [audit.realId, 'Claude validade']));
+    assert.ok(Math.abs(Date.parse(made.expires_at) - Date.now() - 90 * day) < day);
+    const hash = tokenHash(made.token);
+    const auth = () => service('nexo_mcp_authenticate', [hash]);
+    const state = async () => (await service('nexo_mcp_token_state', [hash])).state;
+    assert.deepEqual([(await auth()).id, (await auth()).limited], [made.id, false]);
+    // Calls in the same minute: up to 120, then limited (still identified, so the server can say why).
+    await db.query('update nexo_mcp_private.connectors set window_calls = 119 where id = $1', [made.id]);
+    assert.equal((await auth()).limited, false);
+    assert.equal((await auth()).limited, true);
+    await db.query(`update nexo_mcp_private.connectors set window_start = now() - interval '61 seconds' where id = $1`, [made.id]);
+    assert.equal((await auth()).limited, false, 'a new minute starts over');
+    // Expired: refused, and the reason says so.
+    await db.query(`update nexo_mcp_private.connectors set expires_at = now() - interval '1 minute' where id = $1`, [made.id]);
+    assert.equal(await auth(), null);
+    assert.equal(await state(), 'expired');
+    // Renewed in the app: the same address works again, for 90 days.
+    await denies(() => user(B, tx => rpc(tx, 'nexo_mcp_renew_connector', [made.id])), '42501');
+    await denies(() => user(null, tx => rpc(tx, 'nexo_mcp_renew_connector', [made.id]), 'anon'), '42501');
+    const renewed = await user(A, tx => rpc(tx, 'nexo_mcp_renew_connector', [made.id]));
+    assert.ok(Math.abs(Date.parse(renewed.expires_at) - Date.now() - 90 * day) < day);
+    assert.equal((await auth()).id, made.id);
+    assert.equal(await state(), 'active');
+    const listed = (await user(A, tx => rpc(tx, 'nexo_mcp_connector_status', []))).find((k) => k.id === made.id);
+    assert.equal(Date.parse(listed.expires_at), Date.parse(renewed.expires_at));
+    // SEC-12: a request of the real dataset is not read by a test connector of the same person.
+    const synthetic = await connectorOf(A, ds2, 'Claude de teste SEC-12');
+    const queued = (await db.query(`insert into nexo_mcp_private.commands(owner_id, dataset_id, connector_id, kind, args)
+      values ($1, $2, $3, 'transaction.add', '{}'::jsonb) returning id`, [A, audit.realId, made.id])).rows[0].id;
+    assert.equal((await service('nexo_mcp_command', [made.id, queued])).id, queued);
+    assert.equal(await service('nexo_mcp_command', [synthetic.id, queued]), null);
+    // A revoked address never comes back.
+    await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [made.id]));
+    assert.equal(await auth(), null);
+    assert.equal(await state(), 'revoked');
+    await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_renew_connector', [made.id])), '42501');
+    for (const role of ['anon', 'authenticated']) {
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_authenticate', [hash]), role), '42501');
+      await denies(() => user(A, tx => rpc(tx, 'nexo_mcp_command', [made.id, queued]), role), '42501');
+    }
+    await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [synthetic.id]));
+  });
   await test('security sweep: no table of any Nexo schema is readable by another person or anonymously', async () => {
     const tables = (await db.query(`select table_schema, table_name from information_schema.tables
       where table_type = 'BASE TABLE' and (table_schema like 'nexo%' or table_schema = 'public')`)).rows;

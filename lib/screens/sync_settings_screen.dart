@@ -23,6 +23,21 @@ import '../theme/nexo_tokens.dart';
 /// Account, synchronization and remote laboratory. Real activation always
 /// goes through consent, a saved backup, a local rehearsal and a final
 /// comparison with the server.
+/// Until when the address works; close to the end, how many days.
+String? connectorValidity(McpConnector c, DateTime now) {
+  final end = c.expiresAt;
+  if (end == null) return null;
+  final date = DateFormat('dd/MM/yyyy').format(end);
+  if (!end.isAfter(now)) return 'Venceu em $date: toque em ⋮ › Renovar';
+  final days = end.difference(now).inHours ~/ 24;
+  if (days <= 14) {
+    return days == 0
+        ? 'Vence hoje: renove em ⋮'
+        : 'Vence em ${days == 1 ? '1 dia' : '$days dias'} ($date): renove em ⋮';
+  }
+  return 'Vale até $date';
+}
+
 class SyncSettingsScreen extends StatefulWidget {
   const SyncSettingsScreen({super.key, this.config, this.auth});
 
@@ -175,8 +190,14 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
 
   static String _connectorUse(McpConnector c) {
     final f = DateFormat('dd/MM HH:mm');
-    if (c.lastUsed == null) return 'Ainda não usado';
-    final parts = ['Última chamada: ${f.format(c.lastUsed!)}'];
+    final validity = connectorValidity(c, DateTime.now());
+    if (c.lastUsed == null) {
+      return ['Ainda não usado', if (validity != null) validity].join(' · ');
+    }
+    final parts = [
+      'Última chamada: ${f.format(c.lastUsed!)}',
+      if (validity != null) validity,
+    ];
     if (c.requests7d != null) {
       parts.add(c.requests7d == 1
           ? '1 pedido em 7 dias'
@@ -188,6 +209,20 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           'sem uso há dias; se o Claude não acha o Nexo, gere outro endereço');
     }
     return parts.join(' · ');
+  }
+
+  Future<void> _extendMcp(McpConnector c) async {
+    await _run(() async {
+      try {
+        final end = await McpConnectors.instance!.renew(c.id);
+        _message = end == null
+            ? '${c.label} renovado.'
+            : '${c.label} renovado até ${DateFormat('dd/MM/yyyy').format(end)}. O endereço continua o mesmo.';
+      } on McpUnavailable catch (e) {
+        _message = e.message;
+      }
+    });
+    await _loadMcp();
   }
 
   Future<void> _revokeMcp(McpConnector c) async {
@@ -222,11 +257,17 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
             trailing: PopupMenuButton<String>(
                 tooltip: 'Opções do conector',
                 enabled: !_busy,
-                onSelected: (v) => v == 'renew'
-                    ? _connectClaude(sync, replacing: c)
-                    : _revokeMcp(c),
-                itemBuilder: (_) => const [
-                      PopupMenuItem(
+                onSelected: (v) => switch (v) {
+                      'extend' => _extendMcp(c),
+                      'renew' => _connectClaude(sync, replacing: c),
+                      _ => _revokeMcp(c),
+                    },
+                itemBuilder: (_) => [
+                      if (c.expiresAt != null)
+                        const PopupMenuItem(
+                            value: 'extend',
+                            child: Text('Renovar por 90 dias')),
+                      const PopupMenuItem(
                           value: 'renew', child: Text('Gerar outro endereço')),
                       PopupMenuItem(
                           value: 'revoke', child: Text('Desconectar')),

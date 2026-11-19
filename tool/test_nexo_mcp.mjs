@@ -658,6 +658,28 @@ await test('connection: a revoked or broken address says what to do; a new one w
   assert.ok(list.result.tools.some((t) => t.name === 'get_request_status'));
   assert.match(unauthorizedMessage(null), /Mais › Sincronizar dispositivos/);
 });
+await test('SEC-01: an expired address says how to renew; too many calls in a minute wait, and nothing is read', async () => {
+  const { unauthorizedMessage } = await import('../supabase/functions/nexo-mcp/queue.ts');
+  const busy = 'nexo_mcp_' + 'd'.repeat(64), expired = 'nexo_mcp_' + 'e'.repeat(64);
+  let loads = 0;
+  const handler = createHandler({
+    authenticate: async (t) => t === busy ? { id: 'k3', ownerId: 'o', datasetId: 'd', limited: true } : null,
+    tokenState: async (t) => t === expired ? { state: 'expired', expires_at: '2027-02-18T15:00:00Z' } : { state: 'unknown' },
+    load: async () => { loads++; return ledger; }, audit: async () => {}, today: () => today, actions: () => queue().deps,
+  });
+  const call = (token, body) => handler(new Request(`https://x.supabase.co/functions/v1/nexo-mcp/${token}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+  const list = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_accounts', arguments: {} } };
+  const old = await call(expired, list);
+  assert.equal(old.status, 401);
+  assert.match((await old.json()).error.message, /venceu em 18\/02\/2027.*Renovar.*não precisa trocar no Claude/);
+  const many = await call(busy, list);
+  assert.equal(many.status, 429);
+  assert.equal(many.headers.get('Retry-After'), '60');
+  assert.match((await many.json()).error.message, /Espere um minuto/);
+  assert.equal(loads, 0, 'nothing read');
+  assert.match(unauthorizedMessage({ state: 'expired' }), /^Este endereço do Nexo venceu\. Renove/);
+});
 await test('push: a silent wake-up per device, signed with the service account; dead tokens reported', async () => {
   const { wake, parseServiceAccount, clearTokenCache } = await import('../supabase/functions/nexo-mcp/push.ts');
   const { generateKeyPairSync } = await import('node:crypto');

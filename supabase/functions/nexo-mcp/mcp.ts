@@ -17,13 +17,15 @@ export interface Connector {
   id: string;
   ownerId: string;
   datasetId: string;
+  /// More calls in the current minute than the server answers (SEC-01).
+  limited?: boolean;
 }
 
 export interface Deps {
   /// Resolves the bearer token (hashed by the caller) to a live connector.
   authenticate(token: string): Promise<Connector | null>;
   /// Why [token] was refused, for a clearer message (absent: generic).
-  tokenState?(token: string): Promise<{ state: string; revoked_at?: string } | null>;
+  tokenState?(token: string): Promise<{ state: string; revoked_at?: string; expires_at?: string } | null>;
   load(connector: Connector): Promise<Ledger>;
   audit(connector: Connector, tool: string, ok: boolean): Promise<void>;
   today(): string; // YYYY-MM-DD in the person's time zone
@@ -168,7 +170,7 @@ export function createHandler(deps: Deps) {
     const token = header.startsWith("Bearer ") ? header.slice(7).trim() : fromPath;
     const connector = /^nexo_mcp_[A-Za-z0-9]{40,128}$/.test(token) ? await deps.authenticate(token) : null;
     if (!connector) {
-      let state: { state: string; revoked_at?: string } | null = null;
+      let state: { state: string; revoked_at?: string; expires_at?: string } | null = null;
       if (/^nexo_mcp_[A-Za-z0-9]{40,128}$/.test(token) && deps.tokenState) {
         try {
           state = await deps.tokenState(token);
@@ -178,6 +180,11 @@ export function createHandler(deps: Deps) {
       }
       return json(rpcError(null, -32001, unauthorizedMessage(state)), 401,
         { "WWW-Authenticate": 'Bearer realm="nexo", error="invalid_token"' });
+    }
+    if (connector.limited) {
+      // Nothing is read or queued: a loop, or someone else with the address.
+      return json(rpcError(null, -32002, "Muitas chamadas ao Nexo em um minuto. Espere um minuto e tente de novo."), 429,
+        { "Retry-After": "60" });
     }
     const length = Number(request.headers.get("Content-Length") ?? "0");
     if (length > 64 * 1024) return json(rpcError(null, -32600, "Request too large"), 413);

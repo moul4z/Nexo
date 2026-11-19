@@ -8,7 +8,11 @@ import 'sync_config.dart';
 
 class McpConnector {
   const McpConnector(this.id, this.label, this.lastUsed, this.revoked,
-      {this.requests7d, this.lastRequest, this.createdAt, this.datasetId});
+      {this.requests7d,
+      this.lastRequest,
+      this.createdAt,
+      this.datasetId,
+      this.expiresAt});
   final String id, label;
   final DateTime? lastUsed;
   final bool revoked;
@@ -19,6 +23,9 @@ class McpConnector {
 
   /// The dataset this connector reads; null on very old servers.
   final String? datasetId;
+
+  /// Until when the address works (1.19 servers; renewable in the app).
+  final DateTime? expiresAt;
 }
 
 /// A problem the person can act on.
@@ -112,8 +119,16 @@ class McpConnectors {
             requests7d: detailed ? (c['requests_7d'] as num?)?.toInt() : null,
             lastRequest: _time(c['last_request_at']),
             createdAt: _time(c['created_at']),
-            datasetId: c['dataset_id'] as String?)
+            datasetId: c['dataset_id'] as String?,
+            expiresAt: _time(c['expires_at']))
     ];
+  }
+
+  /// Another 90 days from now for the same address (nothing to change in
+  /// Claude). Returns the new end.
+  Future<DateTime?> renew(String id) async {
+    final result = await _rpc('nexo_mcp_renew_connector', {'p_id': id}) as Map?;
+    return _time(result?['expires_at']);
   }
 
   Future<void> revoke(String id) =>

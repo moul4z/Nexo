@@ -36,9 +36,14 @@ const day = (iso: string) => {
 };
 
 /// What a client (and the person reading it) learns from a refused token.
-export function unauthorizedMessage(state: { state: string; revoked_at?: string } | null): string {
+export function unauthorizedMessage(state: { state: string; revoked_at?: string; expires_at?: string } | null): string {
   const where = "Gere outro no app: Mais › Sincronizar dispositivos › Claude (IA) › Conectar ao Claude, " +
     "e troque o endereço do conector (o histórico de pedidos fica).";
+  if (state?.state === "expired") {
+    const when = state.expires_at ? day(state.expires_at) : null;
+    return `Este endereço do Nexo venceu${when ? ` em ${when}` : ""}. Renove no app: Mais › Sincronizar dispositivos › ` +
+      "Claude (IA) › Renovar. O mesmo endereço volta a funcionar por mais 90 dias; não precisa trocar no Claude.";
+  }
   if (state?.state === "revoked") {
     const when = state.revoked_at ? day(state.revoked_at) : null;
     return `Este endereço do Nexo foi desconectado no app${when ? ` em ${when}` : ""}. ${where}`;
