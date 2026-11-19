@@ -1,6 +1,10 @@
 // lib/screens/backup_screen.dart
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../services/auto_backup.dart';
+import '../services/file_output.dart';
 import '../database/db_helper.dart';
 import '../database/database_platform.dart';
 import '../services/platform_capabilities.dart';
@@ -21,6 +25,78 @@ class _BackupScreenState extends State<BackupScreen> {
   String? _msg;
   bool _msgOk = true;
   Timer? _msgTimer;
+  bool _rehearsing = false;
+
+  /// Copies the app made by itself (AutoBackup), newest first.
+  List<File> _autoCopies = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCopies();
+  }
+
+  Future<void> _loadCopies() async {
+    try {
+      final copies = await AutoBackup.copies();
+      if (mounted) setState(() => _autoCopies = copies);
+    } catch (_) {
+      // Only a list: the screen works without it.
+    }
+  }
+
+  Future<void> _saveCopy(File copy) async {
+    try {
+      final when = AutoBackup.dateOf(copy);
+      final saved = await FileOutput.save(
+          title: 'Salvar cópia do banco do Nexo',
+          name:
+              'nexo-copia-${DateFormat('yyyy-MM-dd').format(when ?? DateTime.now())}.db',
+          extension: 'db',
+          bytes: await copy.readAsBytes());
+      if (saved != null && mounted) _setMsg('Cópia salva em $saved');
+    } catch (_) {
+      if (mounted) _setMsg('Não foi possível salvar a cópia.', ok: false);
+    }
+  }
+
+  /// Restores a file into a temporary database and says what it holds.
+  Future<void> _rehearse() async {
+    setState(() {
+      _rehearsing = true;
+      _msg = null;
+    });
+    try {
+      final counts = await context.read<AppProvider>().rehearseBackup();
+      if (counts == null || !mounted) return;
+      int n(String t) => counts[t] ?? 0;
+      await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+                title: const Text('Este backup restaura'),
+                content: Text(
+                    '${n('transactions')} lançamentos, ${n('accounts')} contas, '
+                    '${n('categories')} categorias, ${n('recurring_payments')} recorrentes e '
+                    '${n('investment_operations')} operações de investimento.\n\n'
+                    'O teste foi feito numa cópia à parte; nada mudou nos seus dados.'),
+                actions: [
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Ok')),
+                ],
+              ));
+    } on FormatException catch (e) {
+      if (mounted)
+        _setMsg('Este backup não restauraria: ${e.message}', ok: false);
+    } catch (_) {
+      if (mounted) {
+        _setMsg('Este backup não pôde ser lido. Nada mudou nos seus dados.',
+            ok: false);
+      }
+    } finally {
+      if (mounted) setState(() => _rehearsing = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -377,6 +453,17 @@ class _BackupScreenState extends State<BackupScreen> {
                     ]),
               ),
               const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _rehearsing || _restoring ? null : _rehearse,
+                icon: _rehearsing
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.fact_check_outlined),
+                label: const Text('Testar um backup sem restaurar'),
+              ),
+              const SizedBox(height: 4),
               OutlinedButton.icon(
                 onPressed: _restoring ? null : _restore,
                 icon: _restoring
@@ -395,6 +482,44 @@ class _BackupScreenState extends State<BackupScreen> {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(22))),
               ),
+            ]),
+          )),
+          const SizedBox(height: 12),
+
+          // ── Copies the app made by itself ─────────────────────────────────
+          Text('Cópias automáticas',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelMedium
+                  ?.copyWith(color: cs.onSurface.withValues(alpha: 0.6))),
+          const SizedBox(height: 8),
+          Card(
+              child: Padding(
+            padding: const EdgeInsets.all(18),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                  'Uma vez por dia o Nexo guarda sozinho uma cópia do banco neste aparelho (7 diárias e 4 semanais) e confere cada uma antes de guardar. Se o app for desinstalado, elas somem junto: de vez em quando, salve uma em outro lugar.',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSurface.withValues(alpha: 0.7))),
+              if (_autoCopies.isEmpty)
+                const Padding(
+                    padding: EdgeInsets.only(top: 10),
+                    child: Text(
+                        'A primeira cópia é feita na próxima abertura do app.')),
+              for (final copy in _autoCopies)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: Text(DateFormat("dd/MM/yyyy 'às' HH:mm")
+                      .format(AutoBackup.dateOf(copy)!)),
+                  trailing: IconButton(
+                      tooltip: 'Salvar uma cópia em…',
+                      icon: const Icon(Icons.save_alt_outlined),
+                      onPressed: () => _saveCopy(copy)),
+                ),
             ]),
           )),
           const SizedBox(height: 12),

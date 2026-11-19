@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import '../models/models.dart';
 import '../database/db_helper.dart';
 import '../services/planning_rules.dart';
+import '../services/ledger_audit.dart';
 import '../services/transaction_metadata_service.dart';
 import '../services/finance_rules.dart';
 import '../services/reconciliation.dart'
@@ -981,6 +982,8 @@ class AppProvider extends ChangeNotifier {
       }
     });
     await _reloadLedger();
+    // A balance typed by the person: the internal check starts over.
+    if (!create) await LedgerAudit.forget(a.id);
     if (previouslyReminded) await CreditReminderService().cancelReminder(a.id);
     if (a.type == 'credit' && a.creditReminderEnabled)
       await CreditReminderService().scheduleReminder(a);
@@ -2834,12 +2837,14 @@ class AppProvider extends ChangeNotifier {
     return savePath;
   }
 
-  Future<int> restoreBackup() async {
+  /// Picks a backup file and reads it, without changing anything. Null when
+  /// nothing was picked.
+  Future<Map<String, dynamic>?> _pickBackup() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
       withData: true,
     );
-    if (result == null || result.files.isEmpty) return 0;
+    if (result == null || result.files.isEmpty) return null;
     final ext = result.files.first.extension?.toLowerCase();
     if (ext != 'json') {
       throw const FormatException('Please select a .json file.');
@@ -2851,7 +2856,7 @@ class AppProvider extends ChangeNotifier {
       jsonStr = utf8.decode(bytes);
     } else {
       final path = result.files.first.path;
-      if (path == null) return 0;
+      if (path == null) return null;
       jsonStr = await File(path).readAsString();
     }
 
@@ -2880,6 +2885,30 @@ class AppProvider extends ChangeNotifier {
       throw const FormatException(
           'Invalid backup file: no recognisable Nexo data found.');
     }
+    return data;
+  }
+
+  /// "Testar um backup": the file is restored into a temporary database
+  /// (DBHelper.rehearseImport); the data here is never touched. Returns the
+  /// rows per table, or null when nothing was picked.
+  Future<Map<String, int>?> rehearseBackup() async {
+    final data = await _pickBackup();
+    if (data == null) return null;
+    if (data.containsKey('settings')) {
+      try {
+        AppSettings.fromJson(
+            Map<String, dynamic>.from(data['settings'] as Map));
+      } catch (_) {
+        throw const FormatException(
+            'As configurações do backup são inválidas.');
+      }
+    }
+    return DBHelper.rehearseImport(data);
+  }
+
+  Future<int> restoreBackup() async {
+    final data = await _pickBackup();
+    if (data == null) return 0;
 
     // Parse preferences before replacing SQLite: malformed settings must not
     // leave a replaced ledger behind when parsing fails afterwards.
@@ -2894,6 +2923,7 @@ class AppProvider extends ChangeNotifier {
       }
     }
     await DBHelper.importAll(data);
+    await LedgerAudit.forget();
 
     if (restoredSettings != null) {
       settings = restoredSettings;

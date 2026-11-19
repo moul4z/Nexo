@@ -12,6 +12,10 @@
 - **O endereço do Claude vale 90 dias** e é renovado no app (Claude (IA) › ⋮ › Renovar por 90 dias), sem trocar o endereço no Claude. A lista mostra até quando vale e avisa nas duas últimas semanas. Os endereços que já existiam ganham 90 dias a partir da atualização do servidor.
 - **Limite de 120 chamadas por minuto:** acima disso o servidor pede para esperar e não lê nada.
 - Um pedido do acervo real não é lido por um conector de teste, nem o contrário.
+### Cópias e conferências
+- **Cópia automática diária:** ao abrir o app, uma vez por dia, o Nexo guarda uma cópia do banco no próprio aparelho (7 diárias e 4 semanais). Cada uma é conferida antes de ser guardada: abre, passa na verificação de integridade do SQLite e tem o mesmo número de lançamentos e contas. Backup › Cópias automáticas lista as cópias e salva uma onde você quiser.
+- **Testar um backup sem restaurar:** o arquivo é restaurado numa cópia à parte, que é apagada depois, e o app diz o que ele traria. Seus dados não mudam.
+- **Conferência interna dos saldos:** uma vez por dia, o app confere se o saldo guardado de cada conta mudou junto com os lançamentos. Se não mudou, registra em Ajuda › Diagnóstico e não corrige nada sozinho.
 
 ## [1.18.0] - 2026-11-18
 ### Conciliação com o Open Finance

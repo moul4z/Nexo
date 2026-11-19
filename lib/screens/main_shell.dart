@@ -1,5 +1,10 @@
 // lib/screens/main_shell.dart
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import '../services/auto_backup.dart';
+import '../services/ledger_audit.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
 import 'finance_home_screen.dart';
@@ -75,8 +80,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) _refreshBank();
   }
 
-  /// Bank data arrives on opening the app, not only in "Para revisar".
+  /// Bank data arrives on opening the app, not only in "Para revisar". The
+  /// daily copy of the database is made then too (never in tests).
   Future<void> _refreshBank() async {
+    if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+      unawaited(AutoBackup.runIfDue());
+      unawaited(LedgerAudit.runIfDue());
+    }
     final pluggy = PluggyInbox.instance;
     if (pluggy == null || !await pluggy.refreshInBackground()) return;
     await BankSnapshots.load(force: true);

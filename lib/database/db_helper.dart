@@ -1401,6 +1401,87 @@ class DBHelper {
   }
 
   static Future<void> importAll(Map<String, dynamic> data) async {
+    _checkBackup(data);
+
+    // A restore is never journaled as recreations: once capture exists it
+    // raises a barrier that requires a new bootstrap before syncing again.
+    await operation(
+        'backup.restore',
+        scope: LedgerScope.restore,
+        (txn) => _writeBackup(txn, data));
+    InvestmentRepository.revision.value++;
+  }
+
+  /// Every table a backup carries, in the order a restore writes them.
+  static const backupTables = [
+    'accounts',
+    'categories',
+    'transactions',
+    'recurring_payments',
+    'wishlist',
+    'lended_people',
+    'lended_money',
+    'assets',
+    'budgets',
+    'recurring_history',
+    'savings_goals',
+    'savings_contributions',
+    'loans',
+    'loan_payments',
+    'transaction_metadata',
+    'card_invoice_payments',
+    'net_worth_snapshots',
+    'import_rules',
+    'notification_suggestions',
+    'investments',
+    'investment_operations',
+    'shared_settings',
+  ];
+
+  /// "Testar este backup": the same checks and the same writes as a
+  /// restore, into a database of its own in a temporary folder that is
+  /// deleted afterwards. The person's data is never touched. Returns how
+  /// many rows of each table the backup would restore; a table that would
+  /// come out different from the file is a [FormatException].
+  static Future<Map<String, int>> rehearseImport(
+      Map<String, dynamic> data) async {
+    final copy = Map<String, dynamic>.from(jsonDecode(jsonEncode(data)) as Map);
+    _checkBackup(copy);
+    final dir = await Directory.systemTemp.createTemp('nexo-ensaio-');
+    Database? db;
+    try {
+      db = await openDatabase(p.join(dir.path, 'ensaio.db'),
+          version: _version, onCreate: _onCreate, singleInstance: false);
+      await db.transaction((txn) => _writeBackup(txn, copy));
+      final counts = <String, int>{};
+      for (final table in backupTables) {
+        final got = Sqflite.firstIntValue(
+                await db.rawQuery('SELECT COUNT(*) FROM $table')) ??
+            0;
+        final listed = (copy[table] as List?)?.length ?? 0;
+        if (got != listed) {
+          throw FormatException(
+              'A tabela $table tem $listed linhas no arquivo e ficaria com $got depois de restaurar.');
+        }
+        counts[table] = got;
+      }
+      final integrity =
+          (await db.rawQuery('PRAGMA integrity_check')).first.values.first;
+      if (integrity != 'ok') {
+        throw const FormatException(
+            'O banco restaurado não passou na verificação de integridade.');
+      }
+      return counts;
+    } finally {
+      await db?.close();
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  /// Everything a backup must pass before any row is written.
+  static void _checkBackup(Map<String, dynamic> data) {
     validateBackup(data);
     InvestmentRepository.validateCashBackup(data);
     try {
@@ -1416,46 +1497,20 @@ class DBHelper {
           'Carteira de investimentos inválida. Nenhum dado foi alterado.');
     }
     _normaliseBackup(data);
+  }
 
-    // A restore is never journaled as recreations: once capture exists it
-    // raises a barrier that requires a new bootstrap before syncing again.
-    await operation('backup.restore', scope: LedgerScope.restore, (txn) async {
-      for (final table in [
-        'accounts',
-        'categories',
-        'transactions',
-        'recurring_payments',
-        'wishlist',
-        'lended_people',
-        'lended_money',
-        'assets',
-        'budgets',
-        'recurring_history',
-        'savings_goals',
-        'savings_contributions',
-        'loans',
-        'loan_payments',
-        'transaction_metadata',
-        'card_invoice_payments',
-        'net_worth_snapshots',
-        'import_rules',
-        'notification_suggestions',
-        'investments',
-        'investment_operations',
-        'shared_settings',
-      ]) {
-        await txn.delete(table);
-        final rows = (data[table] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        final batch = txn.batch();
-        for (final raw in rows) {
-          final row = Map<String, dynamic>.from(raw);
-          batch.insert(table, row,
-              conflictAlgorithm: ConflictAlgorithm.replace);
-        }
-        await batch.commit(noResult: true);
+  static Future<void> _writeBackup(
+      DatabaseExecutor txn, Map<String, dynamic> data) async {
+    for (final table in backupTables) {
+      await txn.delete(table);
+      final rows = (data[table] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final batch = txn.batch();
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw);
+        batch.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
       }
-    });
-    InvestmentRepository.revision.value++;
+      await batch.commit(noResult: true);
+    }
   }
 
   /// Reject incomplete or ambiguous restores before deleting any live row.
