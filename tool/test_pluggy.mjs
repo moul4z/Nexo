@@ -430,4 +430,47 @@ await test('audit PLG-03: whatever fails in one bank, the others are still read'
   assert.match(first.health.message, /não puderam ser guardados agora \(rpc_500\)/, 'the code of the database call, for whoever looks into it');
 });
 
+await test('A4: a pending purchase the bank stopped returning is marked, never deleted; back again, unmarked', async () => {
+  const store = fakeStore([{ item_id: 'item-1', label: 'Banco', last_fetch_at: null }]);
+  const calls = [];
+  // Like nexo_pluggy_vanish.
+  store.vanish = async (_o, itemId, accountIds, seen, fromMs) => {
+    calls.push({ itemId, accountIds, seen: [...seen].sort(), fromMs });
+    let n = 0;
+    for (const r of store.rows.values()) {
+      if (seen.includes(r.external_id)) { r.vanished = false; continue; }
+      if (!r.vanished && accountIds.includes(r.account_external_id) && r.settled === false &&
+        r.review !== 'ignored' && r.occurred_at >= fromMs) { r.vanished = true; n++; }
+    }
+    return n;
+  };
+  const pending = (id, over = {}) => tx({ id, status: 'PENDING', ...over });
+  await syncOwner('owner', source([pending('a'), pending('b'), tx({ id: 'c' }), pending('old', { date: '2026-09-15T15:00:00.000Z' })]), store, { now });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].accountIds, ['acc-bank']);
+  assert.deepEqual(calls[0].seen, ['pluggy:a', 'pluggy:b', 'pluggy:c', 'pluggy:old']);
+  // 35 days back from 20/10 is 15/09; two days of margin, in Brasília.
+  assert.equal(calls[0].fromMs, Date.parse('2026-09-17T03:00:00.000Z'));
+  // The next read: 'a' is gone (cancelled), 'c' was settled, 'old' is before the period.
+  store.rows.get('pluggy:b').review = 'confirmed';
+  const later = { now: new Date(now.getTime() + 2 * 3600000) };
+  const [r] = await syncOwner('owner', source([pending('b'), tx({ id: 'd', amount: 0 })]), store, later);
+  assert.equal(r.vanished, 1);
+  assert.deepEqual(['a', 'b', 'c', 'old'].map((id) => store.rows.get(`pluggy:${id}`).vanished ?? false), [true, false, false, false]);
+  assert.ok(calls[1].seen.includes('pluggy:d'), 'a skipped movement was returned by the bank too');
+  assert.equal(store.rows.size, 4, 'nothing deleted');
+  // Back in the bank's answer (it can take a few days): unmarked.
+  const [again] = await syncOwner('owner', source([pending('a'), pending('b')]), store, { now: new Date(now.getTime() + 4 * 3600000) });
+  assert.equal(store.rows.get('pluggy:a').vanished, false);
+  assert.equal(again.vanished, undefined);
+  // A read that failed marks nothing: the call is never made.
+  const broken = { ...source([]), accounts: async () => { throw new PluggyError(500, true); } };
+  await syncOwner('owner', broken, store, { now: new Date(now.getTime() + 6 * 3600000) });
+  assert.equal(calls.length, 3);
+  // A server without the function keeps working.
+  store.vanish = async () => { throw new Error('rpc_404'); };
+  const [old] = await syncOwner('owner', source([pending('b')]), store, { now: new Date(now.getTime() + 8 * 3600000) });
+  assert.deepEqual([old.fetched, old.vanished], [true, undefined]);
+});
+
 console.log(`PLUGGY: ${passed} tests passed; synthetic data only.`);

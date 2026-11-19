@@ -38,6 +38,9 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
 
   /// Newest bank movement the server holds, across connections.
   DateTime? _lastRead;
+
+  /// Pending purchases the bank stopped returning (out of the list).
+  int _vanished = 0;
   bool _showResolved = false;
   @override
   void initState() {
@@ -108,9 +111,11 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
           writer: _writer(here: createHere));
       // What the app settled leaves the assistant's queue too.
       unawaited(PluggyInbox.instance?.pushNow());
+      final vanished = await NotificationInbox.vanishedCount();
       if (mounted)
         setState(() {
           state = result;
+          _vanished = vanished;
           error = syncError;
           _freshness = freshness;
           _lastRead = lastRead;
@@ -554,6 +559,12 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                               : 'Tudo em dia. Nada precisa de você agora.'
                           : '${ptCount(needs, 'movimentação precisa', 'movimentações precisam')} de você. O app já resolveu o que era repetitivo.',
                       style: Theme.of(context).textTheme.bodyMedium),
+                  if (_vanished > 0) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                        '${ptCount(_vanished, 'compra pendente saiu', 'compras pendentes saíram')} da lista: o banco não mostra mais (cancelada?). Se voltar com outro código, o app reconhece.',
+                        style: TextStyle(color: cs.onSurfaceVariant)),
+                  ],
                   const SizedBox(height: 12),
                 ],
                 if (resolved.isNotEmpty)

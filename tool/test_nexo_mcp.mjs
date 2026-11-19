@@ -47,12 +47,15 @@ await test('a real expense is never neutral because of what the bank calls it', 
     occurredAt: at(m.at), direction: m.direction ?? null, accountId: m.accountId ?? null,
     nexoAccountId: m.nexoAccountId ?? null, operationRef: m.operationRef ?? null,
     paymentRef: m.paymentRef ?? null, sameOwner: m.sameOwner ?? null, counterparty: m.counterparty ?? null,
+    vanished: m.vanished ?? false,
   });
   for (const c of cases.cases) {
     await test(`reconcile like the app: ${c.name}`, () => {
       const result = reconcile(c.movements.map(movement),
         (c.entries ?? []).map((e) => ({ ...e, source: e.source ?? 'manual', categoryId: e.categoryId ?? '' })), {
           ownerNames: cases.owner,
+          // Like the app: an entry of a confirmed movement is taken.
+          linkedIds: new Set((c.settled ?? []).map((s) => s.transactionId)),
           creditAccounts: new Set(cases.creditAccounts),
           settled: (c.settled ?? []).map((s) => ({ movement: movement(s.movement), transactionId: s.transactionId })),
           rules: (c.rules ?? []).map((r) => ({ categoryId: '', targetAccountId: null, ...r })),

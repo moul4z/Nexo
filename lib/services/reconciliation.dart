@@ -21,7 +21,8 @@ class PendingMovement {
       this.operationRef,
       this.paymentRef,
       this.sameOwner,
-      this.counterparty});
+      this.counterparty,
+      this.vanished = false});
   final String id, description;
 
   /// bank | credit: where the bank says the money moved.
@@ -46,6 +47,10 @@ class PendingMovement {
 
   /// Who paid or received, when the bank tells it.
   final String? counterparty;
+
+  /// Pending at the bank and no longer returned by it (cancelled, or back
+  /// later under another id).
+  final bool vanished;
 
   factory PendingMovement.fromRow(Map<String, dynamic> r) {
     // An empty text is no information, like in the connector.
@@ -77,6 +82,7 @@ class PendingMovement {
         _ => null,
       },
       counterparty: text('counterparty'),
+      vanished: r['vanished'] == 1 || r['vanished'] == true,
     );
   }
 
@@ -490,6 +496,35 @@ List<Match> reconcile({
             automatic: m.amountCents <= yieldAutoCents);
       }
     }
+  }
+
+  // 1b. The same movement back under another id: the bank stopped returning
+  // a pending one already linked to an entry and returns it again, renamed.
+  // Same bank account, direction and amount, close in time and in words:
+  // the same entry, never a second one.
+  final reborn = <String>{};
+  for (final m in open()) {
+    final gone = [
+      for (final (i, (s, id)) in settled.indexed)
+        if (s.vanished &&
+            !reborn.contains(id) &&
+            byId.containsKey(id) &&
+            s.accountId != null &&
+            s.accountId == m.accountId &&
+            movementDirection(s) == movementDirection(m) &&
+            s.amountCents == m.amountCents &&
+            (mday(m) - mday(s)).abs() <= 3 &&
+            textSimilarity(s.description, m.description) >= .6)
+          (i, s, id)
+    ]..sort((a, b) {
+        final c = (mday(m) - mday(a.$2)).abs() - (mday(m) - mday(b.$2)).abs();
+        return c != 0 ? c : a.$1 - b.$1;
+      });
+    if (gone.isEmpty) continue;
+    final (_, s, id) = gone.first;
+    reborn.add(id);
+    set(m, Resolution.linked,
+        automatic: true, transaction: byId[id], pair: s, score: 100);
   }
 
   // 2. A payment and its refund: the bank's operation id, or refund words

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.19.0] - em andamento
+### Conciliação com o Open Finance
+- **Cobrança de recorrente vinda do banco paga a recorrente:** em "Para revisar", a cobrança da Netflix, do salário ou da academia aparece como a recorrente prevista, e "Pagar a recorrente" registra com o valor e o dia do banco e avança a próxima ocorrência, sem lançamento solto. Se o valor mudou mais de 5%, o app pergunta se o cadastro passa a usar o novo valor.
+- **"Já foi paga":** ao pagar uma recorrente que já parece lançada (à mão ou do banco), o app oferece ligar a esse lançamento em vez de lançar de novo.
+- **Compra pendente que some do banco:** se o banco deixa de mostrar uma compra pendente (cancelada, ou de volta depois com outro código), ela sai da lista com o motivo e nunca é apagada. Se volta com outro código, o app reconhece a mesma compra e liga ao lançamento que já existia. Na conferência com o banco, o lançamento de uma compra que sumiu aparece como "só no Nexo".
+### Conector
+- `confirm_suggestion` com `recurring_id` paga a recorrente pela cobrança do banco; `pay_recurring` com `transaction_id` liga a ocorrência a um lançamento que já existe (exigem esta versão do app).
+- `list_suggestions` deixa de mostrar o que o banco não mostra mais.
+
 ## [1.18.0] - 2026-11-18
 ### Conciliação com o Open Finance
 - **Uma regra só no app e no Claude:** o que o app decide em "Para revisar" é o que o conector mostra. Um arquivo de casos roda nos dois lados; se um divergir, o teste falha.

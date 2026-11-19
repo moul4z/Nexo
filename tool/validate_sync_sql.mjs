@@ -1020,6 +1020,49 @@ try {
     await user(C, tx => rpc(tx, 'nexo_sync_delete_dataset', [audit.kept]));
     assert.equal((await naming(audit.kept)).datasets, 0);
   });
+  // ── 1.19, A4: a pending purchase the bank stopped returning ──
+  await db.exec(await readFile(new URL('../supabase/migrations/202611200001_vanished.sql', import.meta.url), 'utf8'));
+  await test('A4: a pending movement missing from a full read is marked, never deleted, and unmarked when back', async () => {
+    const item2 = 'item-ficticio-0099';
+    const from = 1760000000000;
+    await service('nexo_pluggy_store', [A, item2, null, JSON.stringify([
+      sugg('v1', { settled: false }), sugg('v2', { settled: false }), sugg('v3', { settled: false, account_external_id: 'acc-9' }),
+      sugg('v4', { settled: false, occurred_at: 1750000000000 }), sugg('v5', { settled: false }), sugg('v6', { settled: false }),
+      sugg('v7', { settled: true })])]);
+    assert.equal(await user(A, tx => rpc(tx, 'nexo_pluggy_decide', [JSON.stringify([
+      { id: 'pluggy:v2', review: 'confirmed', transaction_id: 'entrada-v2' }, { id: 'pluggy:v6', review: 'ignored' }])])), 2);
+    // v1 (pending) and v2 (already entered) are gone; v3 is another account, v4 before the
+    // period, v5 was returned, v6 was ignored and v7 had settled.
+    assert.equal(await service('nexo_pluggy_vanish', [A, item2, ['acc-1'], ['pluggy:v5'], from]), 2);
+    assert.equal(await service('nexo_pluggy_vanish', [A, item2, ['acc-1'], ['pluggy:v5'], from]), 0, 'marked once');
+    const mine = async () => await user(A, tx => rpc(tx, 'nexo_pluggy_suggestions', [0]));
+    const flags = async () => { const rows = await mine(); return ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7'].map((id) => rows.find((r) => r.id === `pluggy:${id}`).vanished); };
+    assert.deepEqual(await flags(), [true, true, false, false, false, false, false]);
+    // The assistant: gone from the pending list, still part of the period, flagged.
+    await db.query(`update nexo_mcp_private.connectors set revoked_at = now() where owner_id = $1 and revoked_at is null`, [A]);
+    const real = await connectorOf(A, audit.realId, 'Claude A4');
+    const pending = await service('nexo_mcp_suggestions', [real.id, 200]);
+    assert.ok(!pending.some((r) => r.id === 'pluggy:v1') && pending.some((r) => r.id === 'pluggy:v3'));
+    const all = await service('nexo_mcp_bank_movements', [real.id, 0, forever]);
+    assert.deepEqual(['v1', 'v2', 'v3'].map((id) => all.find((r) => r.id === `pluggy:${id}`).vanished), [true, true, false]);
+    // The real-dataset rule of the audit still holds.
+    const synthetic = await connectorOf(A, ds2, 'Claude de teste A4');
+    assert.deepEqual(await service('nexo_mcp_suggestions', [synthetic.id, 200]), []);
+    assert.deepEqual(await service('nexo_mcp_bank_movements', [synthetic.id, 0, forever]), []);
+    // Back in the bank's answer: unmarked. Nothing was deleted or rewritten.
+    assert.equal(await service('nexo_pluggy_vanish', [A, item2, ['acc-1'], ['pluggy:v1', 'pluggy:v5'], from]), 0);
+    assert.deepEqual(await flags(), [false, true, false, false, false, false, false]);
+    const v2 = (await mine()).find((r) => r.id === 'pluggy:v2');
+    assert.deepEqual([v2.review, v2.transaction_id, v2.amount_cents], ['confirmed', 'entrada-v2', 3290]);
+    // Only the service calls it, for an item of that person, with a period.
+    for (const role of ['anon', 'authenticated']) {
+      await denies(() => user(A, tx => rpc(tx, 'nexo_pluggy_vanish', [A, item2, ['acc-1'], [], from]), role), '42501');
+    }
+    await denies(() => service('nexo_pluggy_vanish', [B, item2, ['acc-1'], [], from]), '42501');
+    await denies(() => service('nexo_pluggy_vanish', [A, item2, ['acc-1'], [], null]), '22023');
+    await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [real.id]));
+    await user(A, tx => rpc(tx, 'nexo_mcp_revoke_connector', [synthetic.id]));
+  });
   await test('security sweep: no table of any Nexo schema is readable by another person or anonymously', async () => {
     const tables = (await db.query(`select table_schema, table_name from information_schema.tables
       where table_type = 'BASE TABLE' and (table_schema like 'nexo%' or table_schema = 'public')`)).rows;

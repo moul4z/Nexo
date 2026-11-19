@@ -304,6 +304,12 @@ class PluggyInbox {
         for (final r in rows) {
           final id = r['id'], review = r['review'];
           if (id is! String || !isPluggy(id)) continue;
+          // The bank stopped returning it (or returns it again). Any row:
+          // a decided one only matters to the reconciliation.
+          await txn.update('notification_suggestions',
+              {'vanished': r['vanished'] == true ? 1 : 0},
+              where: 'id = ? AND vanished != ?',
+              whereArgs: [id, r['vanished'] == true ? 1 : 0]);
           if (review == 'pending') {
             final required = {
               'amount_cents': r['amount_cents'],
@@ -337,6 +343,7 @@ class PluggyInbox {
               },
               'counterparty': text('counterparty'),
               'manual': r['manual'] == true ? 1 : 0,
+              'vanished': r['vanished'] == true ? 1 : 0,
             };
             final inserted = await txn.insert('notification_suggestions',
                 {'id': id, 'app_id': appId, ...values},

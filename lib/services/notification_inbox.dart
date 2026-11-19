@@ -85,9 +85,18 @@ class NotificationInbox {
   static Future<List<Map<String, dynamic>>> pending() async {
     await ingest([]);
     return (await DBHelper.database).query('notification_suggestions',
-        where: 'status = ?',
+        // What the bank stopped returning (cancelled?) is not reviewed.
+        where: 'status = ? AND vanished = 0',
         whereArgs: ['pending'],
         orderBy: 'occurred_at DESC');
+  }
+
+  /// Pending movements the bank stopped returning: out of the review list,
+  /// counted so the screen can say why they left.
+  static Future<int> vanishedCount() async {
+    final rows = await (await DBHelper.database).rawQuery(
+        "SELECT COUNT(*) AS n FROM notification_suggestions WHERE status = 'pending' AND vanished = 1");
+    return rows.first['n'] as int? ?? 0;
   }
 
   static Future<void> ignore(String id) async => (await DBHelper.database)

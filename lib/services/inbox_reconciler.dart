@@ -287,7 +287,8 @@ class InboxReconciler {
               .millisecondsSinceEpoch
         ]);
     final answered = await db.query('notification_suggestions',
-        columns: ['transaction_id'], where: 'transaction_id IS NOT NULL');
+        columns: ['transaction_id'],
+        where: 'transaction_id IS NOT NULL AND vanished = 0');
     return reconcileAccount(
         accountId: accountId,
         rows: rows,

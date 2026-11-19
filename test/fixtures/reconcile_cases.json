@@ -529,6 +529,85 @@
         "m1": {"resolution": "recurring", "automatic": false, "recurringId": "netflix"},
         "m2": {"resolution": "newEntry", "automatic": false}
       }
+    },
+    {
+      "name": "V1 a compra pendente sumiu e voltou com outro id: ligada ao mesmo lançamento, nada novo",
+      "movements": [
+        {"id": "new", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO *PG", "at": "2026-11-13T10:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "old", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-12T19:00:00", "accountId": "nu-card", "nexoAccountId": "card", "vanished": true}}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 8990, "description": "Farmácia", "accountId": "card", "day": "2026-11-12", "categoryId": "health"}
+      ],
+      "expect": {
+        "new": {"resolution": "linked", "automatic": true, "transactionId": "e1", "pairId": "old"}
+      }
+    },
+    {
+      "name": "V2 sem sumir, a mesma compra de novo é outra compra: pergunta",
+      "movements": [
+        {"id": "new", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-13T10:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "old", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-12T19:00:00", "accountId": "nu-card", "nexoAccountId": "card"}}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 8990, "description": "Farmácia", "accountId": "card", "day": "2026-11-12", "categoryId": "health"}
+      ],
+      "expect": {
+        "new": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "V3 sumiu, mas a nova tem outro valor, outro cartão ou é longe no tempo: não liga",
+      "movements": [
+        {"id": "cents", "cents": 8890, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-13T10:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "other", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-13T11:00:00", "accountId": "inter-card", "nexoAccountId": "card"},
+        {"id": "late", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-17T10:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "old", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-12T19:00:00", "accountId": "nu-card", "nexoAccountId": "card", "vanished": true}}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 8990, "description": "Farmácia", "accountId": "card", "day": "2026-11-12", "categoryId": "health"}
+      ],
+      "expect": {
+        "cents": {"resolution": "newEntry", "automatic": false},
+        "other": {"resolution": "newEntry", "automatic": false},
+        "late": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "V4 duas iguais voltam e só uma tinha sumido: só a primeira é a mesma",
+      "movements": [
+        {"id": "a", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-13T10:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "b", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-13T10:05:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "old", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-12T19:00:00", "accountId": "nu-card", "nexoAccountId": "card", "vanished": true}}
+      ],
+      "entries": [
+        {"id": "e1", "type": "expense", "cents": 8990, "description": "Farmácia", "accountId": "card", "day": "2026-11-12", "categoryId": "health"}
+      ],
+      "expect": {
+        "a": {"resolution": "linked", "automatic": true, "transactionId": "e1", "pairId": "old"},
+        "b": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "V5 o lançamento da que sumiu foi apagado: a nova é nova",
+      "movements": [
+        {"id": "new", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-13T10:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "settled": [
+        {"transactionId": "e1", "movement": {"id": "old", "cents": 8990, "direction": "out", "medium": "credit", "description": "DROGARIA EXEMPLO", "at": "2026-11-12T19:00:00", "accountId": "nu-card", "nexoAccountId": "card", "vanished": true}}
+      ],
+      "entries": [],
+      "expect": {
+        "new": {"resolution": "newEntry", "automatic": false}
+      }
     }
   ]
 }

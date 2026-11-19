@@ -24,6 +24,9 @@ export interface Movement {
   paymentRef: string | null;
   sameOwner: boolean | null;
   counterparty: string | null;
+  /// Pending at the bank and no longer returned by it (cancelled, or back
+  /// later under another id).
+  vanished?: boolean;
 }
 
 export interface Entry {
@@ -253,6 +256,29 @@ export function reconcile(movements: Movement[], entries: Entry[], options: Opti
     }
   }
 
+  // 1b. The same movement back under another id: the bank stopped returning
+  // a pending one already linked to an entry and returns it again, renamed.
+  // Same bank account, direction and amount, close in time and in words:
+  // the same entry, never a second one.
+  const settled = options.settled ?? [];
+  const reborn = new Set<string>();
+  for (const m of open()) {
+    const gone = settled.map((s, i) => ({ s, i }))
+      .filter(({ s }) =>
+        s.movement.vanished === true && !reborn.has(s.transactionId) &&
+        entries.some((e) => e.id === s.transactionId) &&
+        s.movement.accountId !== null && s.movement.accountId === m.accountId &&
+        direction(s.movement) === dir.get(m.id) && s.movement.amountCents === m.amountCents &&
+        Math.abs(mday(m) - mday(s.movement)) <= 3 &&
+        textSimilarity(s.movement.description, m.description) >= 0.6)
+      .sort((a, b) =>
+        (Math.abs(mday(m) - mday(a.s.movement)) - Math.abs(mday(m) - mday(b.s.movement))) || a.i - b.i);
+    if (!gone.length) continue;
+    const { s } = gone[0];
+    reborn.add(s.transactionId);
+    set(m, { resolution: "linked", automatic: true, transactionId: s.transactionId, pairId: s.movement.id, score: 100 });
+  }
+
   // 2. A payment and its refund: the bank's operation id, or refund words
   // from the same merchant within 30 days, or the same merchant giving the
   // money back the same day.
@@ -285,7 +311,6 @@ export function reconcile(movements: Movement[], entries: Entry[], options: Opti
   // 3. The IOF of an international purchase, charged up to 3 days later:
   // remembered with the purchase, decided with it below.
   const iofOf = new Map<string, Movement>();
-  const settled = options.settled ?? [];
   const iofTaken = new Set(settled.filter((s) => IOF.test(s.movement.description)).map((s) => s.transactionId));
   const near = (ratio: number) => Math.abs(ratio - 0.035);
   for (const iof of open().filter((m) => m.medium === "credit" && isOut(m) && IOF.test(m.description))) {

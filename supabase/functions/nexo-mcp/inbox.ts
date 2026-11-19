@@ -32,6 +32,7 @@ export function toMovement(s: Raw): Movement {
     paymentRef: str(s.payment_ref),
     sameOwner: typeof s.same_owner === "boolean" ? s.same_owner : null,
     counterparty: str(s.counterparty),
+    vanished: s.vanished === true,
   };
 }
 
@@ -213,7 +214,9 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
 export function reconcileAccount(l: Ledger, movements: Raw[], accountId: string, from: string, to: string,
   bankBalanceCents: number | null, nexoBalanceCents: number, now: number,
   inPeriod: (s: Raw) => boolean = () => true) {
-  const pending = movements.filter((s) => s.review === "pending");
+  // What the bank stopped returning is not in the bank any more: not "only
+  // in the bank", and an entry made for it is "only in the Nexo".
+  const pending = movements.filter((s) => s.review === "pending" && s.vanished !== true);
   const decided = movements.filter((s) => s.review !== "pending");
   // Pairs cross accounts: everything pending is classified, then this
   // account's side is read.
@@ -225,7 +228,9 @@ export function reconcileAccount(l: Ledger, movements: Raw[], accountId: string,
 
   // Entries a bank movement already answers for.
   const answered = new Set<string>();
-  for (const d of decided) if (typeof d.transaction_id === "string" && d.transaction_id) answered.add(d.transaction_id);
+  for (const d of decided) {
+    if (typeof d.transaction_id === "string" && d.transaction_id && d.vanished !== true) answered.add(d.transaction_id);
+  }
   for (const m of matches.values()) if (m.resolution === "linked" && m.transactionId) answered.add(m.transactionId);
 
   // Not money that is missing: it cancels out, or it is not this account's.

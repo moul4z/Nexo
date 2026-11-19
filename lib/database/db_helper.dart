@@ -25,7 +25,7 @@ class NewerDatabaseException implements Exception {
 
 class DBHelper {
   static Database? _db;
-  static const int _version = 29;
+  static const int _version = 30;
 
   /// Public accessor for the current DB/backup schema version, so UI code
   /// (e.g. the Backup screen) never has to hardcode a copy that can drift
@@ -556,6 +556,7 @@ class DBHelper {
     if (oldV < 24) await InvestmentRepository.createSchema(db);
     if (oldV < 28) await InvestmentRepository.addCurrency(db);
     if (oldV < 29) await schema29(db);
+    if (oldV < 30) await schema30(db);
     if (oldV < 27) await createSharedSettings(db);
     if (oldV < 26) {
       // Kind of spending of a category (envelopes by share of income).
@@ -866,6 +867,7 @@ class DBHelper {
     await InvestmentRepository.createSchema(db);
     await createSharedSettings(db);
     await schema29(db);
+    await schema30(db);
     await _insertDefaults(db);
   }
 
@@ -904,6 +906,18 @@ class DBHelper {
     await add('recurring_payments', 'split_json', 'TEXT');
     await add('accounts', 'interest_monthly_percent', 'REAL');
     await add('budgets', 'subcategory', "TEXT NOT NULL DEFAULT ''");
+  }
+
+  /// 1.19: only adds a column, local to this device. The bank stopped
+  /// returning a movement that was pending there (cancelled, or back later
+  /// under another id): it leaves the review list and is never deleted.
+  static Future<void> schema30(DatabaseExecutor db) async {
+    final columns =
+        await db.rawQuery('PRAGMA table_info(notification_suggestions)');
+    if (!columns.any((c) => c['name'] == 'vanished')) {
+      await db.execute('ALTER TABLE notification_suggestions '
+          'ADD COLUMN vanished INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   static Future<void> _insertDefaults(Database db) async {

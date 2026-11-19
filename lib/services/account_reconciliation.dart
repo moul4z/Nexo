@@ -73,9 +73,15 @@ AccountReconciliation reconcileAccount({
   };
   final exists = {for (final t in transactions) t.id};
 
+  // What the bank stopped returning is not in the bank any more: not
+  // "only in the bank", and an entry made for it is "only in the Nexo".
+  bool gone(Map<String, dynamic> r) => r['vanished'] == 1;
   final pendingRows = [
     for (final r in rows)
-      if (r['status'] == 'pending' && (r['amount_cents'] as int? ?? 0) > 0) r
+      if (r['status'] == 'pending' &&
+          !gone(r) &&
+          (r['amount_cents'] as int? ?? 0) > 0)
+        r
   ];
   final confirmed = [
     for (final r in rows)
@@ -115,7 +121,8 @@ AccountReconciliation reconcileAccount({
   final answered = <String>{
     ...alreadyAnswered,
     for (final r in rows)
-      if (r['transaction_id'] is String) r['transaction_id'] as String,
+      if (r['transaction_id'] is String && !gone(r))
+        r['transaction_id'] as String,
     for (final m in matches)
       if (m.resolution == Resolution.linked && m.transaction != null)
         m.transaction!.id,

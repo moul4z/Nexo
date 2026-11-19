@@ -204,8 +204,8 @@ void main() {
     await db.execute('DROP TABLE shared_settings');
     await db.setVersion(24);
     await DBHelper.close();
-    // 29 only adds columns for the reconciliation (1.18).
-    expect(await (await DBHelper.database).getVersion(), 29);
+    // 29 and 30 only add columns for the reconciliation (1.18, 1.19).
+    expect(await (await DBHelper.database).getVersion(), 30);
     // v28 brings the currency back with reais for every old row.
     final upgraded = (await repo.load()).single;
     expect(upgraded.investment.currency, 'BRL');

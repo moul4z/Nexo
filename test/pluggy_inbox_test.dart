@@ -313,4 +313,44 @@ void main() {
         now: DateTime.now().add(const Duration(days: 2)));
     expect(await pendingIds(), isEmpty);
   });
+
+  test(
+      'A4: a pending purchase the bank stopped returning leaves the list; back again, it returns',
+      () async {
+    remote.add('gone', 3290, now.subtract(const Duration(days: 2)));
+    remote.add('kept', 1500, now.subtract(const Duration(days: 2)));
+    remote.add('done', 900, now.subtract(const Duration(days: 3)));
+    expect(await inbox.sync(), null);
+    expect(await pendingIds(),
+        unorderedEquals(['pluggy:gone', 'pluggy:kept', 'pluggy:done']));
+    remote.rows['pluggy:gone']!['vanished'] = true;
+    // Entered on another device, then gone from the bank.
+    remote.rows['pluggy:done']!
+      ..['review'] = 'confirmed'
+      ..['vanished'] = true;
+    expect(await inbox.sync(), null);
+    expect(await pendingIds(), ['pluggy:kept']);
+    expect(await NotificationInbox.vanishedCount(), 1);
+    Future<Map<String, Object?>> local(String id) async =>
+        (await (await DBHelper.database).query('notification_suggestions',
+                where: 'id = ?', whereArgs: ['pluggy:$id']))
+            .single;
+    expect([
+      (await local('gone'))['status'],
+      (await local('gone'))['vanished']
+    ], [
+      'pending',
+      1
+    ], reason: 'not decided: the server keeps it, the bank may return it');
+    expect(remote.decisions.where((d) => d['id'] == 'pluggy:gone'), isEmpty);
+    expect((await local('done'))['vanished'], 1,
+        reason: 'a decided one is marked for the reconciliation');
+    expect(await DBHelper.getTransactions(), isEmpty,
+        reason: 'nothing is removed or created by itself');
+    // The bank returns it again (it can take a few days).
+    remote.rows['pluggy:gone']!['vanished'] = false;
+    expect(await inbox.sync(), null);
+    expect(await pendingIds(), unorderedEquals(['pluggy:gone', 'pluggy:kept']));
+    expect(await NotificationInbox.vanishedCount(), 0);
+  });
 }

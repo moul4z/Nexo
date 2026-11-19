@@ -63,6 +63,10 @@ const store: Store = {
       // Same: official invoices are a check, never required.
     }
   },
+  vanish: async (owner, itemId, accountIds, seen, fromMs) =>
+    await rpc("nexo_pluggy_vanish", {
+      p_owner: owner, p_item_id: itemId, p_account_ids: accountIds, p_seen: seen, p_from_ms: fromMs,
+    }) as number,
 };
 
 /// Validates the session with Supabase Auth instead of trusting the token.

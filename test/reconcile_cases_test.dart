@@ -30,7 +30,8 @@ void main() {
       operationRef: m['operationRef'] as String?,
       paymentRef: m['paymentRef'] as String?,
       sameOwner: m['sameOwner'] as bool?,
-      counterparty: m['counterparty'] as String?);
+      counterparty: m['counterparty'] as String?,
+      vanished: m['vanished'] as bool? ?? false);
 
   for (final c in (fixture['cases'] as List).cast<Map<String, dynamic>>()) {
     test(c['name'] as String, () {
@@ -60,6 +61,11 @@ void main() {
                   source: e['source'] as String? ?? 'manual')
           },
           ownerNames: (fixture['owner'] as List).cast<String>(),
+          // Like the app: an entry of a confirmed movement is taken.
+          linkedIds: {
+            for (final s in (c['settled'] as List? ?? const []))
+              (s as Map)['transactionId'] as String
+          },
           creditAccounts:
               (fixture['creditAccounts'] as List).cast<String>().toSet(),
           settled: [

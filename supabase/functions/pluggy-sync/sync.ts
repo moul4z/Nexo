@@ -27,6 +27,10 @@ export interface Store {
   accounts?(owner: string, itemId: string, updatedAt: string | null, rows: AccountSnapshot[]): Promise<void>;
   /// Official invoices of one card; the bank's list replaces the kept one.
   bills?(owner: string, accountId: string, rows: BillSnapshot[]): Promise<void>;
+  /// After a complete read: pending movements of these accounts, inside the
+  /// period, that the bank no longer returns are marked (never deleted);
+  /// the ones it returns again are unmarked. Returns how many were marked.
+  vanish?(owner: string, itemId: string, accountIds: string[], seen: string[], fromMs: number): Promise<number>;
 }
 
 export interface ItemResult {
@@ -38,12 +42,21 @@ export interface ItemResult {
   skipped: number;
   /// Official invoices read per card, or the error code. Never amounts.
   bills?: (number | string)[];
+  /// Pending movements the bank stopped returning in this read.
+  vanished?: number;
 }
 
 /// Meu Pluggy refreshes once a day; reading more often only costs requests.
 export const minIntervalMs = 60 * 60 * 1000;
 /// Suggestions older than this are not useful to review any more.
 export const windowDays = 35;
+
+/// The start of the period in which a missing pending movement counts as
+/// gone: the first day asked, in Brasília, plus two days, so a movement at
+/// the edge (a date the bank reads in another time zone) is never marked.
+export function vanishFrom(dateFrom: string): number {
+  return Date.parse(`${dateFrom}T00:00:00-03:00`) + 2 * 86400000;
+}
 
 export async function syncOwner(owner: string, source: Source, store: Store,
   options: { now?: Date; force?: boolean } = {}): Promise<ItemResult[]> {
@@ -60,6 +73,8 @@ export async function syncOwner(owner: string, source: Source, store: Store,
     }
     let health: ItemHealth;
     const incoming: Suggestion[] = [];
+    const seen: string[] = [];
+    const accountIds: string[] = [];
     const snapshots: AccountSnapshot[] = [];
     let updatedAt: string | null = null;
     let skipped = 0;
@@ -85,10 +100,12 @@ export async function syncOwner(owner: string, source: Source, store: Store,
           }
         }
         const txs = await source.transactions(account.id, dateFrom);
+        accountIds.push(account.id);
         const latest = latestMovementAt(txs);
         if (latest && (!updatedAt || latest > updatedAt)) updatedAt = latest;
         for (const tx of txs) {
           const s = toSuggestion(tx, account);
+          seen.push(s.external_id);
           if (isSkip(s)) skipped++;
           else incoming.push(s);
         }
@@ -131,9 +148,19 @@ export async function syncOwner(owner: string, source: Source, store: Store,
       if (store.accounts) await store.accounts(owner, item.item_id, updatedAt, snapshots);
       // After the accounts: each bill belongs to a stored card.
       if (store.bills) for (const [accountId, rows] of cardBills) await store.bills(owner, accountId, rows);
+      // Every account of the item was read in full (a partial page throws
+      // above), so what is missing from this answer is really missing.
+      let vanished: number | undefined;
+      if (store.vanish) {
+        try {
+          vanished = await store.vanish(owner, item.item_id, accountIds, seen, vanishFrom(dateFrom));
+        } catch {
+          // A server without the migration: the movements are kept anyway.
+        }
+      }
       results.push({
         item_id: item.item_id, label: item.label, health, fetched: true, written, skipped,
-        bills: bills.length ? bills : undefined,
+        bills: bills.length ? bills : undefined, vanished: vanished || undefined,
       });
     } catch (error) {
       // Read, but not kept (the database refused or did not answer): the
