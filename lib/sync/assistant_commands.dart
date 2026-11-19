@@ -532,7 +532,8 @@ class AssistantCommands {
             nextDate: first,
             endDate:
                 a['end_date'] == null ? null : _day(a['end_date'] as String?),
-            recurringType: a['kind'] as String? ?? 'subscription'));
+            recurringType: a['kind'] as String? ?? 'subscription',
+            iofPercent: (a['iof_percent'] as num?)?.toDouble()));
         return {'recurring_id': id, 'message': 'Recorrente cadastrada.'};
       case 'recurring.update':
         final r = _recurring(a['id']);

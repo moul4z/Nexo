@@ -3,6 +3,7 @@
 ## [1.19.0] - em andamento
 ### Conciliação com o Open Finance
 - **Cobrança de recorrente vinda do banco paga a recorrente:** em "Para revisar", a cobrança da Netflix, do salário ou da academia aparece como a recorrente prevista, e "Pagar a recorrente" registra com o valor e o dia do banco e avança a próxima ocorrência, sem lançamento solto. Se o valor mudou mais de 5%, o app pergunta se o cadastro passa a usar o novo valor.
+- **Assinatura paga no exterior:** a recorrente ganha "IOF de compra internacional (%)". A previsão de caixa, a fatura futura e os compromissos do mês somam o IOF a cada cobrança. A alíquota é a que você informa, porque ela muda por decreto. O Claude também cadastra e altera (`iof_percent`).
 - **"Já foi paga":** ao pagar uma recorrente que já parece lançada (à mão ou do banco), o app oferece ligar a esse lançamento em vez de lançar de novo.
 - **Compra pendente que some do banco:** se o banco deixa de mostrar uma compra pendente (cancelada, ou de volta depois com outro código), ela sai da lista com o motivo e nunca é apagada. Se volta com outro código, o app reconhece a mesma compra e liga ao lançamento que já existia. Na conferência com o banco, o lançamento de uma compra que sumiu aparece como "só no Nexo".
 ### Conector

@@ -119,7 +119,9 @@ class CashForecast {
         }
         final id = 'recurring:${r.id}:${r.nextDate.toIso8601String()}';
         if (!ids.contains(id)) {
-          final amount = r.paymentType == 'income' ? r.amount : -r.amount;
+          // With the IOF of a purchase abroad, when the person set one.
+          final amount =
+              r.paymentType == 'income' ? r.amount : -r.forecastAmount;
           if (a.type == 'credit') {
             cardPurchase(a, r.nextDate, -amount);
           } else {

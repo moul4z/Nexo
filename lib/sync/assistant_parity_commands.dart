@@ -501,6 +501,13 @@ class AssistantParityCommands {
           next.recurringType = a['kind'] as String;
         }
         if (a['notes'] != null) next.notes = a['notes'] as String;
+        if (a.containsKey('iof_percent')) {
+          final iof = (a['iof_percent'] as num?)?.toDouble();
+          if (iof != null && (iof < 0 || iof > 25)) {
+            throw ArgumentError('IOF inválido.');
+          }
+          next.iofPercent = iof == 0 ? null : iof;
+        }
         if (a['reminder_enabled'] != null) {
           next.reminderEnabled = a['reminder_enabled'] as bool;
         }

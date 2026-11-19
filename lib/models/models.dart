@@ -354,6 +354,18 @@ class RecurringPayment {
   String notes;
   String recurringType; // 'subscription' | 'installment'
 
+  /// IOF of a purchase abroad, in percent, typed by the person (the rate
+  /// changes by decree; never fixed in the code). Null: not abroad.
+  double? iofPercent;
+
+  /// What the forecast counts for one occurrence: the bank charges the
+  /// purchase and, a day or two later, the IOF on it.
+  double get forecastAmount {
+    final iof = iofPercent;
+    if (paymentType != 'expense' || iof == null || iof <= 0) return amount;
+    return ((amount * 100).round() * (100 + iof) / 100).round() / 100;
+  }
+
   RecurringPayment({
     required this.id,
     required this.name,
@@ -373,6 +385,7 @@ class RecurringPayment {
     this.earlyReminderEnabled = false,
     this.notes = '',
     this.recurringType = 'subscription',
+    this.iofPercent,
   });
 
   // Inclusive count: first → last
@@ -462,6 +475,7 @@ class RecurringPayment {
         'early_reminder_enabled': earlyReminderEnabled ? 1 : 0,
         'notes': notes,
         'recurring_type': recurringType,
+        'iof_percent': iofPercent,
       };
 
   static RecurringPayment fromMap(Map<String, dynamic> m,
@@ -494,6 +508,7 @@ class RecurringPayment {
         earlyReminderEnabled: (m['early_reminder_enabled'] as int? ?? 0) == 1,
         notes: (m['notes'] as String?) ?? '',
         recurringType: (m['recurring_type'] as String?) ?? 'subscription',
+        iofPercent: (m['iof_percent'] as num?)?.toDouble(),
       );
 }
 

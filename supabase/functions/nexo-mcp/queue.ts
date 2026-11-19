@@ -18,6 +18,8 @@ export const RECURRING_BANK_BUILD = 61;
 /// The minimum app build a request needs, or null when any version can.
 export function minBuildFor(kind: string, args: Record<string, unknown>): number | null {
   if (kind === "suggestion.recurring" || kind === "recurring.link") return RECURRING_BANK_BUILD;
+  // An older app would save the recurring without its IOF.
+  if ((kind === "recurring.add" || kind === "recurring.edit") && "iof_percent" in args) return RECURRING_BANK_BUILD;
   if (kind === "rule.save" && (args.auto === true || args.type === "transfer" || args.type === "internal")) {
     return RECONCILE_BUILD;
   }

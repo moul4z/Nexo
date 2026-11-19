@@ -750,6 +750,13 @@ class _RecurringEditorState extends State<_RecurringEditor> {
   final _frequencyCtrl = TextEditingController(text: '1');
   final _installmentsCtrl = TextEditingController(text: '12');
   final _notesCtrl = TextEditingController();
+  final _iofCtrl = TextEditingController();
+
+  /// Empty or zero: not a purchase abroad.
+  double? get _iof {
+    final v = double.tryParse(_iofCtrl.text.trim().replaceAll(',', '.'));
+    return v == null || v <= 0 || v > 25 ? null : v;
+  }
 
   late String _type;
   String _recurringType = 'subscription';
@@ -805,6 +812,9 @@ class _RecurringEditorState extends State<_RecurringEditor> {
       _reminder = e.reminderEnabled;
       _earlyReminder = e.earlyReminderEnabled;
       _notesCtrl.text = e.notes;
+      if (e.iofPercent != null) {
+        _iofCtrl.text = '${e.iofPercent}'.replaceAll('.', ',');
+      }
       final parts = e.reminderTime.split(':');
       _reminderTime = TimeOfDay(
         hour: int.tryParse(parts.firstOrNull ?? '') ?? 9,
@@ -823,6 +833,7 @@ class _RecurringEditorState extends State<_RecurringEditor> {
     _frequencyCtrl.dispose();
     _installmentsCtrl.dispose();
     _notesCtrl.dispose();
+    _iofCtrl.dispose();
     super.dispose();
   }
 
@@ -934,6 +945,7 @@ class _RecurringEditorState extends State<_RecurringEditor> {
       reminderTime: reminderText,
       earlyReminderEnabled: _reminder && _earlyReminder,
       notes: _notesCtrl.text.trim(),
+      iofPercent: _type == 'expense' ? _iof : null,
     );
 
     try {
@@ -1246,6 +1258,21 @@ class _RecurringEditorState extends State<_RecurringEditor> {
                       value: _earlyReminder,
                       onChanged: (value) =>
                           setState(() => _earlyReminder = value),
+                    ),
+                  ],
+                  if (_type == 'expense') ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _iofCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'IOF de compra internacional (%) (opcional)',
+                        helperText:
+                            'Para assinatura cobrada em outra moeda. Confira a alíquota em vigor: ela muda por decreto.',
+                        helperMaxLines: 2,
+                        prefixIcon: Icon(Icons.public_outlined),
+                      ),
                     ),
                   ],
                   const SizedBox(height: 8),

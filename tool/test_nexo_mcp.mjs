@@ -444,6 +444,23 @@ await test('recurring: create, update and delete validate before queueing', asyn
   await assert.rejects(act(q, 'update_recurring', { id: 'stream' }, richer), ToolInputError);
   await act(q, 'delete_recurring', { id: 'parc' }, richer);
   assert.equal(q.items.length, 3);
+  // A subscription abroad: the IOF goes to the app, which must know it.
+  const { minBuildFor } = await import('../supabase/functions/nexo-mcp/queue.ts');
+  await act(q, 'add_recurring', { name: 'Serviço AI', type: 'expense', amount: 110, account_id: 'bank', category_id: 'health',
+    first_date: '2026-11-05', iof_percent: 3.5 }, richer);
+  assert.equal(q.items.at(-1).args.iof_percent, 3.5);
+  assert.equal(minBuildFor('recurring.add', q.items.at(-1).args), 61);
+  assert.equal(minBuildFor('recurring.add', q.items[0].args), null, 'without IOF any app applies it');
+  await act(q, 'update_recurring', { id: 'stream', iof_percent: null }, richer);
+  assert.deepEqual([q.items.at(-1).kind, q.items.at(-1).args], ['recurring.edit', { id: 'stream', iof_percent: null }]);
+  await assert.rejects(act(q, 'add_recurring', { name: 'X', type: 'expense', amount: 10, account_id: 'bank', category_id: 'health',
+    first_date: '2026-11-05', iof_percent: 40 }, richer), /entre 0 e 25/);
+  // The forecast counts it: R$ 39,90 with 3,5% is R$ 41,30, in both the app and the connector.
+  const { recurringCents } = await import('../supabase/functions/nexo-mcp/finance.ts');
+  assert.equal(recurringCents({ amount: 39.9, payment_type: 'expense', iof_percent: 3.5 }), 4130);
+  assert.equal(recurringCents({ amount: 1099, payment_type: 'expense', iof_percent: 3.5 }), 113747);
+  assert.equal(recurringCents({ amount: 39.9, payment_type: 'income', iof_percent: 3.5 }), 3990);
+  assert.equal(recurringCents({ amount: 39.9 }), 3990);
 });
 await test('budgets, categories, goals and invoices', async () => {
   const q = queue();

@@ -4,7 +4,8 @@
 // screens. Batch changes have a dry run, and every recorded request can be
 // undone (undo_request).
 import {
-  analyze, cents, currencyOf, day, isCalendarDay, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text,
+  analyze, cents, currencyOf, day, isCalendarDay, isNeutral, type Ledger, meta, metadataIndex, money, num, recurringCents,
+  type Row, text,
 } from "./finance.ts";
 import { balanceCents, callTool, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { envelopeById, envelopes, spendingTypes } from "./envelopes.ts";
@@ -1229,7 +1230,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         if (!main.some((a) => a.id === r.account_id)) continue;
         for (const d of occurrences(r, until)) {
           items.push({ date: d < today ? today : d, what: `${text(r.name)} (recorrente${d < today ? `, atrasada desde ${d}` : ""})`,
-            amount: (r.payment_type === "income" ? 1 : -1) * cents(num(r.amount)) });
+            amount: (r.payment_type === "income" ? 1 : -1) * recurringCents(r) });
         }
       }
       const metas = metadataIndex(l);

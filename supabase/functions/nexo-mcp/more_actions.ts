@@ -13,6 +13,11 @@ type Enqueue = (kind: string, args: Record<string, unknown>) => Promise<{ id: st
 const dateField = { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" };
 const amountField = { type: "number", exclusiveMinimum: 0, maximum: 1000000000, description: "Valor em reais" };
 const idField = { type: "string" };
+const iofField = {
+  type: "number", minimum: 0, maximum: 25,
+  description: "IOF de compra internacional, em %, para assinatura cobrada em outra moeda. A previsão soma o IOF a cada cobrança. " +
+    "Confira a alíquota em vigor (muda por decreto); não chute.",
+};
 
 export const readOnlyMore = new Set(["get_recurring", "get_budgets", "get_goals"]);
 
@@ -71,6 +76,7 @@ export const moreActions: (ToolDefinition & { destructive?: boolean })[] = [
         first_date: { ...dateField, description: "Primeira cobrança" },
         end_date: { ...dateField, description: "Última cobrança (parcelamentos)" },
         kind: { type: "string", enum: ["subscription", "installment"], description: "Padrão subscription (fixa)" },
+        iof_percent: iofField,
       },
       required: ["name", "type", "amount", "account_id", "category_id", "first_date"],
       additionalProperties: false,
@@ -99,6 +105,7 @@ export const moreActions: (ToolDefinition & { destructive?: boolean })[] = [
         notes: { type: "string", maxLength: 200 },
         reminder_enabled: { type: "boolean" },
         reminder_time: { type: "string", pattern: "^\\d{2}:\\d{2}$" },
+        iof_percent: { ...iofField, type: ["number", "null"], description: iofField.description + " null ou 0 tira." },
       },
       required: ["id"],
       additionalProperties: false,
@@ -251,6 +258,17 @@ function dateArg(args: Args, key: string, required = false): string | undefined 
   }
   return v;
 }
+/// The IOF of a purchase abroad, only for an expense; 0 or absent: none.
+function iofArg(args: Args, type: string): number | undefined {
+  const v = args.iof_percent;
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 25) {
+    throw new ToolInputError("iof_percent deve ser um número entre 0 e 25.");
+  }
+  if (v > 0 && type !== "expense") throw new ToolInputError("IOF só vale para despesa.");
+  return v > 0 ? Math.round(v * 1000) / 1000 : undefined;
+}
+
 function enumArg<T extends string>(args: Args, key: string, values: T[], fallback: T): T {
   const v = args[key] ?? fallback;
   if (typeof v !== "string" || !values.includes(v as T)) throw new ToolInputError(`${key} deve ser: ${values.join(", ")}.`);
@@ -384,6 +402,7 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
             overdue: nextOf(r) < today,
             every: `${num(r.freq_val) || 1} ${unitLabel[text(r.freq_unit)] ?? text(r.freq_unit)}`,
             kind: text(r.recurring_type) === "installment" ? "parcelamento" : "fixa/assinatura",
+            iof_percent: num(r.iof_percent) > 0 ? num(r.iof_percent) : undefined,
             account: text(find(l.accounts, r.account_id)?.name),
             account_id: text(r.account_id),
             category: text(find(l.categories, r.category_id)?.name),
@@ -424,7 +443,8 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
       return pending(q.id, name === "pay_recurring" ? "Efetivação" : "Pulo da ocorrência");
     }
     case "add_recurring": {
-      only(args, ["name", "type", "amount", "account_id", "category_id", "frequency", "every", "first_date", "end_date", "kind"]);
+      only(args, ["name", "type", "amount", "account_id", "category_id", "frequency", "every", "first_date", "end_date", "kind",
+        "iof_percent"]);
       const type = enumArg(args, "type", ["expense", "income"], "expense");
       const a = account(l, str(args, "account_id", 256));
       category(l, str(args, "category_id", 256), type);
@@ -441,15 +461,16 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
         name: str(args, "name", 80), type, amount_cents: amountCents(args), account_id: text(a.id),
         category_id: args.category_id, freq_unit: unit[enumArg(args, "frequency", ["daily", "weekly", "monthly", "yearly"], "monthly")],
         freq_val: every, first_date: first, end_date: end ?? null, kind,
+        ...(iofArg(args, type) ? { iof_percent: iofArg(args, type) } : {}),
       });
       return pending(q.id, "Nova recorrente");
     }
     case "update_recurring": {
       only(args, ["id", "name", "amount", "account_id", "category_id", "next_date", "end_date", "frequency", "every", "kind",
-        "notes", "reminder_enabled", "reminder_time"]);
+        "notes", "reminder_enabled", "reminder_time", "iof_percent"]);
       const r = recurring(l, str(args, "id", 256));
-      const extended = ["frequency", "every", "kind", "notes", "reminder_enabled", "reminder_time"].some((k) => args[k] !== undefined) ||
-        args.end_date === null;
+      const extended = ["frequency", "every", "kind", "notes", "reminder_enabled", "reminder_time", "iof_percent"]
+        .some((k) => args[k] !== undefined) || args.end_date === null;
       if (extended) {
         const body: Args = { id: text(r.id) };
         const nm = str(args, "name", 80, false);
@@ -485,6 +506,9 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
             throw new ToolInputError("reminder_time deve ser HH:mm.");
           }
           body.reminder_time = args.reminder_time;
+        }
+        if (args.iof_percent !== undefined) {
+          body.iof_percent = args.iof_percent === null ? null : iofArg(args, text(r.payment_type) || "expense") ?? null;
         }
         return pending((await enqueue("recurring.edit", body)).id, "Alteração da recorrente");
       }

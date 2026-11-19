@@ -2,7 +2,7 @@
 // (lib/services/billing_cycle.dart): a purchase made on the closing day
 // ("melhor dia de compra") already belongs to the next invoice; payments are
 // keyed by the closing date.
-import { cents, day, isNeutral, type Ledger, meta, metadataIndex, money, num, type Row, text } from "./finance.ts";
+import { cents, day, isNeutral, type Ledger, meta, metadataIndex, money, num, recurringCents, type Row, text } from "./finance.ts";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const iso = (y: number, m: number, d: number) => {
@@ -115,7 +115,7 @@ export function cardInvoices(l: Ledger, today: string, cardId?: string, withItem
       const first = text(r.next_date);
       for (const d of occurrences(r, planUntil)) {
         if (d === day(first) && entered.has(`recurring:${text(r.id)}:${first}`)) continue;
-        slot(cycleFor(d, closing, dueDay)).planned += (r.payment_type === "income" ? -1 : 1) * cents(num(r.amount));
+        slot(cycleFor(d, closing, dueDay)).planned += (r.payment_type === "income" ? -1 : 1) * recurringCents(r);
       }
     }
     const current = cycleFor(today, closing, dueDay);

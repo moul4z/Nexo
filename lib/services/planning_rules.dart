@@ -83,10 +83,10 @@ double monthlyFixedCosts(List<RecurringPayment> recurring, DateTime now) {
     if (r.paymentType == 'income' || r.freqVal <= 0) continue;
     if (r.endDate != null && r.endDate!.isBefore(now)) continue;
     total += switch (r.freqUnit) {
-      'days' => r.amount * 365 / 12 / r.freqVal,
-      'weeks' => r.amount * 52 / 12 / r.freqVal,
-      'years' => r.amount / 12 / r.freqVal,
-      _ => r.amount / r.freqVal,
+      'days' => r.forecastAmount * 365 / 12 / r.freqVal,
+      'weeks' => r.forecastAmount * 52 / 12 / r.freqVal,
+      'years' => r.forecastAmount / 12 / r.freqVal,
+      _ => r.forecastAmount / r.freqVal,
     };
   }
   return total;

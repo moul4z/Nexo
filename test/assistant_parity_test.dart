@@ -640,6 +640,18 @@ void main() {
     final r = app.recurring.single;
     expect([r.freqUnit, r.endDate, r.notes, r.amount],
         ['years', null, 'plano anual', 1099]);
+    // The IOF of a purchase abroad: set, kept by another change, taken out.
+    expect((await send('recurring.edit', {'id': 'net', 'iof_percent': 3.5})).$1,
+        'done');
+    expect(
+        (await send('recurring.edit', {'id': 'net', 'notes': 'em dólar'})).$1,
+        'done');
+    expect(app.recurring.single.iofPercent, 3.5);
+    expect(app.recurring.single.forecastAmount, 1137.47);
+    expect(
+        (await send('recurring.edit', {'id': 'net', 'iof_percent': null})).$1,
+        'done');
+    expect(app.recurring.single.iofPercent, isNull);
     expect(
         (await send('recurring.edit', {'id': 'net', 'kind': 'installment'})).$1,
         'rejected',

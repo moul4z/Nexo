@@ -47,6 +47,15 @@ export interface Meta {
 export const text = (v: unknown): string => (typeof v === "string" ? v : "");
 export const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
 export const cents = (amount: number): number => Math.round(amount * 100);
+
+/// One occurrence of a recurring in the forecast: with the IOF of a purchase
+/// abroad when the person set one (forecastAmount in models.dart).
+export function recurringCents(r: Record<string, unknown>): number {
+  const base = cents(num(r.amount));
+  const iof = num(r.iof_percent);
+  if ((r.payment_type ?? "expense") !== "expense" || iof <= 0) return base;
+  return Math.round(base * (100 + iof) / 100);
+}
 export const day = (iso: string): string => iso.slice(0, 10);
 
 /// A day that exists, as AAAA-MM-DD. The engine alone accepts 2026-02-30
