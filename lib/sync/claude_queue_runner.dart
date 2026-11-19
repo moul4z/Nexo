@@ -10,6 +10,7 @@ import '../services/desktop_profile.dart';
 import '../services/diagnostics.dart';
 import '../services/inbox_reconciler.dart';
 import '../services/inbox_writer.dart';
+import '../services/bank_notices.dart';
 import '../services/notification_inbox.dart';
 import '../services/platform_capabilities.dart';
 import '../services/pluggy_inbox.dart';
@@ -77,7 +78,8 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
       await prefs.setInt(_bankPassKey, now);
       await pluggy.sync();
     }
-    await InboxReconciler.background(
+    final started = DateTime.now();
+    final state = await InboxReconciler.background(
         pending: NotificationInbox.pending,
         transactions: provider.transactions,
         metadata: provider.transactionMetadata,
@@ -87,6 +89,11 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
         writer: AppInboxWriter(provider),
         push: () async => pluggy?.pushNow(),
         every: headless ? Duration.zero : const Duration(minutes: 10));
+    // With the app closed nobody sees "Para revisar": what the app did by
+    // itself, and in the morning what yesterday left, become notices.
+    if (headless && state != null) {
+      await BankNotices.afterPass(state, started: started);
+    }
   } catch (e) {
     Diagnostics.note('bank pass', e);
   }

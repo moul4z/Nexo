@@ -14,6 +14,7 @@ import '../services/notification_preferences.dart';
 import '../services/pluggy_inbox.dart';
 import '../services/inbox_reconciler.dart';
 import '../services/inbox_writer.dart';
+import '../services/bank_notices.dart';
 import '../services/reconciliation.dart';
 import '../widgets/nexo_ui.dart';
 import '../utils/snackbar.dart';
@@ -22,7 +23,11 @@ import '../services/subscription_detector.dart';
 import 'recurring_screen.dart';
 
 class NotificationInboxScreen extends StatefulWidget {
-  const NotificationInboxScreen({super.key});
+  const NotificationInboxScreen({super.key, this.day});
+
+  /// Only the movements of this day (the morning notice), until the person
+  /// asks for the whole list.
+  final DateTime? day;
   @override
   State<NotificationInboxScreen> createState() =>
       _NotificationInboxScreenState();
@@ -41,6 +46,95 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
 
   /// Pending purchases the bank stopped returning (out of the list).
   int _vanished = 0;
+
+  /// The day shown alone; null: everything.
+  late DateTime? _day = widget.day;
+
+  Future<void> _notices() async {
+    var auto = await BankNotices.autoEnabled();
+    var morning = await BankNotices.morningEnabled();
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setLocal) => AlertDialog(
+                  title: const Text('Avisos com o app fechado'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Quando o Nexo lançar sozinho'),
+                        subtitle: const Text(
+                            'Rendimentos, transferências entre suas contas e regras "lançar sozinho".'),
+                        value: auto,
+                        onChanged: (v) async {
+                          await BankNotices.setAutoEnabled(v);
+                          setLocal(() => auto = v);
+                        }),
+                    SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Resumo da manhã'),
+                        subtitle: const Text(
+                            'O que chegou do banco ontem e ficou sem lançamento.'),
+                        value: morning,
+                        onChanged: (v) async {
+                          await BankNotices.setMorningEnabled(v);
+                          setLocal(() => morning = v);
+                        }),
+                  ]),
+                  actions: [
+                    FilledButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Pronto')),
+                  ],
+                )));
+  }
+
+  /// "Confirmar todas": what can be registered without a question (a
+  /// category suggested by a rule or by history, and the Nexo account the
+  /// bank account is linked to), through the same path as one by one.
+  Future<void> _confirmAll(List<Match> ready) async {
+    final app = context.read<AppProvider>();
+    final total = ready.fold<int>(0, (s, m) => s + m.movement.amountCents);
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text('Confirmar ${ptCount(ready.length, 'lançamento')}?'),
+              content: Text(
+                  'Total de ${formatAmount(total / 100, app.settings.currency)}, cada um com a categoria sugerida e a conta ligada ao banco. '
+                  'O que não tem categoria sugerida continua na lista.'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancelar')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Confirmar')),
+              ],
+            ));
+    if (ok != true || !mounted) return;
+    final writer = AppInboxWriter(app, canCreate: true);
+    var done = 0;
+    for (final m in ready) {
+      final mv = m.movement;
+      try {
+        await writer.addEntry(mv,
+            type: mv.outgoing ? 'expense' : 'income',
+            accountId: mv.nexoAccountId!,
+            categoryId: m.categoryId!,
+            description: mv.description);
+        done++;
+      } catch (_) {
+        // Already registered (another device, a second tap): skipped.
+      }
+    }
+    if (mounted) {
+      showAppSnackbar(context,
+          '${ptCount(done, 'lançamento confirmado', 'lançamentos confirmados')}.');
+    }
+    unawaited(PluggyInbox.instance?.pushNow());
+    await reload();
+  }
+
   bool _showResolved = false;
   @override
   void initState() {
@@ -369,7 +463,15 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
         hidden ? '••••' : formatAmount(cents / 100, 'BRL');
     String when(DateTime d) => DateFormat('dd/MM HH:mm').format(d);
     String account(String? id) => app.accountById(id ?? '')?.name ?? '—';
-    final matches = state?.matches ?? const <Match>[];
+    final day = _day;
+    final matches = [
+      for (final m in state?.matches ?? const <Match>[])
+        if (day == null ||
+            (m.movement.occurredAt.year == day.year &&
+                m.movement.occurredAt.month == day.month &&
+                m.movement.occurredAt.day == day.day))
+          m
+    ];
     final ids = {for (final m in matches) m.movement.id};
     bool waits(PendingMovement? p) => p != null && ids.contains(p.id);
     // The IOF of a purchase still waiting is reviewed with the purchase.
@@ -492,6 +594,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                             ? 'Rendimentos do banco viram receita "Rendimentos".'
                             : 'Rendimentos do banco saem da caixa sem lançamento.')));
                 }
+                if (v == 'notices') await _notices();
                 if (v == 'forget') {
                   await NotificationPreferences.clear();
                   if (context.mounted)
@@ -511,6 +614,9 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                     const PopupMenuItem(
                         value: 'forget',
                         child: Text('Esquecer contas sugeridas')),
+                    const PopupMenuItem(
+                        value: 'notices',
+                        child: Text('Avisos com o app fechado')),
                   ]),
           IconButton(
               onPressed: () => reload(force: true),
@@ -549,6 +655,14 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                       ])),
                 if (state == null && error == null)
                   const LinearProgressIndicator(),
+                if (day != null)
+                  Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: InputChip(
+                          label: Text(
+                              'Só ${DateFormat('dd/MM').format(day)} · ver tudo'),
+                          onDeleted: () => setState(() => _day = null),
+                          onPressed: () => setState(() => _day = null))),
                 if (state != null) ...[
                   Text(
                       needs == 0
@@ -877,6 +991,22 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                 ],
                 if (fresh.isNotEmpty) ...[
                   const SizedBox(height: 16),
+                  if ([
+                    for (final m in fresh)
+                      if (m.resolution == Resolution.newEntry &&
+                          m.categoryId != null &&
+                          m.movement.nexoAccountId != null &&
+                          !iofOf.containsKey(m.movement.id))
+                        m
+                  ]
+                      case final ready when ready.length >= 2)
+                    Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.tonalIcon(
+                            onPressed: () => _confirmAll(ready),
+                            icon: const Icon(Icons.done_all),
+                            label: Text(
+                                'Confirmar ${ready.length} com categoria sugerida'))),
                   NexoSectionTitle('Novas',
                       subtitle: 'Sem lançamento parecido no Nexo',
                       icon: Icons.fiber_new_outlined,

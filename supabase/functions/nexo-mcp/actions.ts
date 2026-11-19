@@ -80,6 +80,33 @@ async function decidedAround(deps: ActionDeps, pending: Record<string, unknown>[
   }
 }
 
+/// Bank movements of day [d] still waiting for the person, as the app's
+/// morning notice counts them: nothing the app settles by itself. Undefined
+/// when the server does not tell the movements.
+async function unrecordedOn(deps: ActionDeps, l: Ledger, d: string) {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await deps.suggestions(200);
+  } catch {
+    return undefined;
+  }
+  const ofDay = rows.filter((s) => movementDate(Number(s.occurred_at)) === d);
+  if (!ofDay.length) return { date: d, count: 0, spent: 0, items: [] };
+  const matches = new Map(classify(l, rows, await decidedAround(deps, rows), deps.now?.() ?? Date.now()).map((m) => [m.id, m]));
+  const waiting = ofDay.filter((s) => matches.get(String(s.id))?.automatic !== true);
+  const out = (s: Record<string, unknown>) => s.direction === "out" ||
+    (s.direction !== "in" && s.kind !== "income" && s.kind !== "refund");
+  return {
+    date: d,
+    count: waiting.length,
+    spent: money(waiting.filter(out).reduce((sum, s) => sum + Number(s.amount_cents), 0)),
+    items: waiting.slice(0, 20).map((s) => ({
+      id: s.id, description: s.description, bank: s.bank,
+      amount: money((out(s) ? -1 : 1) * Number(s.amount_cents)),
+    })),
+  };
+}
+
 /// "Dados do banco até…": the assistant must not read an empty day as no
 /// spending when the bank simply did not send today's data yet.
 async function bankFreshness(deps: ActionDeps, today: string) {
@@ -875,7 +902,10 @@ async function dispatchAction(name: string, args: Args, l: Ledger, today: string
         due_next_3_days: [...(upcoming.pending_expenses ?? []), ...(upcoming.recurring_expected ?? [])],
         card_limit_alerts: cardLimitAlerts(l, today),
         bank_data: await bankFreshness(deps, today),
-        note: "Transferências, reservas e pendentes não contam como gasto. Se bank_data disser que hoje ainda não chegou, gastos do banco podem faltar.",
+        unrecorded_yesterday: await unrecordedOn(deps, l,
+          new Date(Date.parse(`${today}T12:00:00Z`) - 86400000).toISOString().slice(0, 10)),
+        note: "Transferências, reservas e pendentes não contam como gasto. Se bank_data disser que hoje ainda não chegou, gastos do banco podem faltar. " +
+          "unrecorded_yesterday: movimentos do banco de ontem que ainda esperam a pessoa (list_suggestions mostra o que fazer).",
       };
     }
     case "get_bank_sync_status": {

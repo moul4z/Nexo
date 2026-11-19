@@ -6,7 +6,11 @@
 - **Assinatura paga no exterior:** a recorrente ganha "IOF de compra internacional (%)". A previsão de caixa, a fatura futura e os compromissos do mês somam o IOF a cada cobrança. A alíquota é a que você informa, porque ela muda por decreto. O Claude também cadastra e altera (`iof_percent`).
 - **"Já foi paga":** ao pagar uma recorrente que já parece lançada (à mão ou do banco), o app oferece ligar a esse lançamento em vez de lançar de novo.
 - **Compra pendente que some do banco:** se o banco deixa de mostrar uma compra pendente (cancelada, ou de volta depois com outro código), ela sai da lista com o motivo e nunca é apagada. Se volta com outro código, o app reconhece a mesma compra e liga ao lançamento que já existia. Na conferência com o banco, o lançamento de uma compra que sumiu aparece como "só no Nexo".
+- **Resumo da manhã:** com o app fechado, a partir das 7h, se ontem chegaram movimentos do banco que ainda esperam você, uma notificação diz quantos. O toque abre Para revisar só naquele dia.
+- **Confirmar todas:** em Para revisar, as novas que já têm categoria sugerida e conta ligada ao banco são confirmadas de uma vez, depois de mostrar quantas são e o total. O resto continua na lista. Repetir o toque não duplica.
+- **Aviso quando o app lança sozinho com ele fechado** (rendimentos, transferências entre suas contas, regras "lançar sozinho"). Os dois avisos podem ser desligados em Para revisar › ⋮ › Avisos com o app fechado.
 ### Conector
+- `get_daily_digest` traz `unrecorded_yesterday`: os movimentos de ontem que ainda esperam você, sem o que o app resolve sozinho.
 - `confirm_suggestion` com `recurring_id` paga a recorrente pela cobrança do banco; `pay_recurring` com `transaction_id` liga a ocorrência a um lançamento que já existe (exigem esta versão do app).
 - `list_suggestions` deixa de mostrar o que o banco não mostra mais.
 ### Segurança do conector

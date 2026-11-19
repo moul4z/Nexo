@@ -33,6 +33,7 @@ import 'sync/supabase_auth.dart';
 import 'sync/sync_config.dart';
 import 'sync/sync_controller.dart';
 import 'services/pluggy_inbox.dart';
+import 'services/bank_notices.dart';
 import 'sync/mcp_connectors.dart';
 import 'sync/assistant_commands.dart';
 import 'services/receipt_scan_mlkit.dart';
@@ -195,14 +196,18 @@ class _NexoAppState extends State<NexoApp> {
       }
     });
 
-    _reminderSub = FinancialReminders.instance.routes.listen((route) {
-      if (route == weeklyReviewRoute) _pushWeeklyReview();
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (await FinancialReminders.instance.listenToTaps() ==
-          weeklyReviewRoute) {
+    void open(String route) {
+      if (route == weeklyReviewRoute) {
         _pushWeeklyReview();
+      } else if (route.startsWith(BankNotices.inboxRoute)) {
+        _pushInbox(day: BankNotices.dayOf(route));
       }
+    }
+
+    _reminderSub = FinancialReminders.instance.routes.listen(open);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final route = await FinancialReminders.instance.listenToTaps();
+      if (route != null) open(route);
     });
 
     _quickAddSub = QuickAddService.instance.routeStream.listen((route) {
@@ -231,10 +236,10 @@ class _NexoAppState extends State<NexoApp> {
         ?.push(MaterialPageRoute(builder: (_) => const MonthReviewScreen()));
   }
 
-  void _pushInbox() {
+  void _pushInbox({DateTime? day}) {
     if (!mounted || !context.read<AppProvider>().settings.onboarded) return;
     rootNavigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (_) => const NotificationInboxScreen()));
+        MaterialPageRoute(builder: (_) => NotificationInboxScreen(day: day)));
   }
 
   @override

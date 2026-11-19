@@ -779,6 +779,21 @@ await test('daily digest: what came in and out, card purchases, alerts and data 
   assert.equal(r.expenses.some((x) => x.description === 'Ontem'), false);
   assert.equal(r.bank_data.banks[0].today_arrived, false);
   await assert.rejects(act(q, 'get_daily_digest', { date: '2026-10-21' }, dayLedger), ToolInputError);
+  // Yesterday's bank movements still waiting for the person, as the app's morning notice counts them.
+  const at = (d) => Date.parse(`${d}T15:00:00Z`);
+  const mv = (id, d, cents, description, extra = {}) => ({ id: `pluggy:${id}`, bank: 'Banco A', occurred_at: at(d), amount_cents: cents,
+    kind: 'expense', medium: 'bank', description, direction: 'out', account_id: 'acc-1', nexo_account_id: 'bank', settled: true, ...extra });
+  q.deps.suggestions = async () => [
+    mv('loja', '2026-10-19', 4590, 'Loja Exemplo'),
+    mv('pix', '2026-10-19', 2000, 'Pix recebido - Cliente Exemplo', { kind: 'income', direction: 'in' }),
+    mv('cofre', '2026-10-19', 1000, 'Reserva por gasto'),
+    mv('hoje', '2026-10-20', 1200, 'Padaria Exemplo'),
+  ];
+  const y = (await act(q, 'get_daily_digest', {}, dayLedger)).unrecorded_yesterday;
+  assert.deepEqual([y.date, y.count, y.spent], ['2026-10-19', 2, 45.9], 'the reserve is settled by the app; today is not yesterday');
+  assert.deepEqual(y.items.map((i) => [i.id, i.amount]), [['pluggy:loja', -45.9], ['pluggy:pix', 20]]);
+  q.deps.suggestions = async () => { throw new Error('rpc_500'); };
+  assert.equal((await act(q, 'get_daily_digest', {}, dayLedger)).unrecorded_yesterday, undefined, 'an older server: nothing said');
 });
 
 // ── Parity with the app (29/10/2026) ───────────────────────────────────

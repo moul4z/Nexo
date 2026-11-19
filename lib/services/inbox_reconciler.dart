@@ -158,7 +158,8 @@ class InboxReconciler {
   /// The same work as opening "Para revisar", after a sync: what the app
   /// settles by itself stops reaching the person and the assistant. Then the
   /// decisions go to the server. A failure waits for the next round.
-  static Future<void> background(
+  /// Returns what the pass decided (null when it did not run).
+  static Future<InboxState?> background(
       {required Future<List<Map<String, dynamic>>> Function() pending,
       required List<AppTransaction> transactions,
       required Map<String, TransactionMetadata> metadata,
@@ -170,12 +171,12 @@ class InboxReconciler {
       Duration every = const Duration(minutes: 10)}) async {
     final now = DateTime.now();
     final last = _lastBackground;
-    if (last != null && now.difference(last) < every) return;
+    if (last != null && now.difference(last) < every) return null;
     _lastBackground = now;
     try {
       final rows = await pending();
-      if (rows.isEmpty) return;
-      await run(
+      if (rows.isEmpty) return null;
+      final state = await run(
           pendingRows: rows,
           transactions: transactions,
           metadata: metadata,
@@ -184,8 +185,10 @@ class InboxReconciler {
           recurring: recurring,
           writer: writer);
       await push?.call();
+      return state;
     } catch (_) {
       // The screen does the same when opened.
+      return null;
     }
   }
 

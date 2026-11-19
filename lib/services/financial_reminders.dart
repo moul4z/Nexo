@@ -145,20 +145,25 @@ class FinancialReminders {
           const InitializationSettings(
               android: AndroidInitializationSettings('ic_notification')),
           onDidReceiveNotificationResponse: (response) {
-        if (response.payload == weeklyReviewRoute) {
-          _routes.add(weeklyReviewRoute);
-        }
+        final payload = response.payload;
+        if (payload != null && _known(payload)) _routes.add(payload);
       });
       final launch = await plugin.getNotificationAppLaunchDetails();
       final payload = launch?.notificationResponse?.payload;
       return launch?.didNotificationLaunchApp == true &&
-              payload == weeklyReviewRoute
+              payload != null &&
+              _known(payload)
           ? payload
           : null;
     } catch (_) {
       return null;
     }
   }
+
+  /// Routes a notification may open: the weekly review, or "Para revisar"
+  /// (whole, or on one day) from the bank notices.
+  static bool _known(String payload) =>
+      payload == weeklyReviewRoute || payload.startsWith('notification_inbox');
 
   Future<Map<String, dynamic>> preferences() async {
     final p = await SharedPreferences.getInstance();
