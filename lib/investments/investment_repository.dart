@@ -89,6 +89,7 @@ class InvestmentRepository {
       await tx.insert('investment_operations', opening.toMap());
       await _cash(tx, opening, item.name,
           currency: item.currency, assetClass: item.assetClass);
+      await _brokerFromAccount(tx, item.id, opening.cashAccountId);
     });
     revision.value++;
   }
@@ -120,6 +121,7 @@ class InvestmentRepository {
       await _cash(tx, op, rows.single['name'] as String,
           currency: rows.single['currency'] as String? ?? 'BRL',
           assetClass: rows.single['asset_class'] as String? ?? '');
+      await _brokerFromAccount(tx, op.investmentId, op.cashAccountId);
       await tx.update('investments', {'archived': 0},
           where: 'id=?', whereArgs: [op.investmentId]);
     });
@@ -390,6 +392,52 @@ class InvestmentRepository {
           where: 'id=?', whereArgs: [operationId]);
     });
     revision.value++;
+  }
+
+  /// Name, code and broker of an asset, as the person corrects them.
+  /// Quantities, operations and money never change here.
+  Future<void> edit(String id,
+      {String? name, String? ticker, String? institution}) async {
+    final db = await database();
+    await ledgerTransaction(db, 'investment.edit', (tx) async {
+      final rows =
+          await tx.query('investments', where: 'id=?', whereArgs: [id]);
+      if (rows.isEmpty) {
+        throw const FormatException('Investimento não encontrado.');
+      }
+      final currency = rows.single['currency'] as String? ?? 'BRL';
+      final next = Investment.fromMap({
+        ...rows.single,
+        if (name != null) 'name': name.trim(),
+        if (ticker != null)
+          'ticker': normalizeTicker(ticker, currency: currency),
+        if (institution != null) 'institution': institution.trim(),
+      });
+      await tx.update(
+          'investments',
+          {
+            'name': next.name,
+            'ticker': next.ticker,
+            'institution': next.institution
+          },
+          where: 'id=?',
+          whereArgs: [id]);
+    });
+    revision.value++;
+  }
+
+  /// An asset without a broker takes the name of the broker account it was
+  /// bought with.
+  Future<void> _brokerFromAccount(
+      DatabaseExecutor tx, String investmentId, String? accountId) async {
+    if (accountId == null) return;
+    final account = await tx.query('accounts',
+        columns: ['name'],
+        where: "id=? AND type='broker'",
+        whereArgs: [accountId]);
+    if (account.isEmpty) return;
+    await tx.update('investments', {'institution': account.single['name']},
+        where: "id=? AND institution=''", whereArgs: [investmentId]);
   }
 
   Future<void> archive(String id, {bool archived = true}) async {

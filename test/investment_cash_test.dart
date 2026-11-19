@@ -252,6 +252,32 @@ void main() {
     app.dispose();
   });
 
+  test(
+      'bought with a broker account, the asset takes its name; editing it moves nothing',
+      () async {
+    await DBHelper.insertAccount(Account(
+        id: 'broker',
+        name: 'Corretora Exemplo',
+        type: 'broker',
+        currency: 'BRL',
+        balance: 500,
+        colorValue: 0));
+    await repo.create(asset(), op('buy', 'buy', 10, 10000, account: 'broker'));
+    expect(
+        (await repo.load()).single.investment.institution, 'Corretora Exemplo');
+    await repo.edit('asset', institution: 'Outra Corretora', name: 'Ação X');
+    await repo.record(op('buy2', 'buy', 1, 1000, account: 'broker', day: 1));
+    final item = (await repo.load()).single.investment;
+    expect([item.name, item.institution], ['Ação X', 'Outra Corretora'],
+        reason: 'a broker the person chose is kept');
+    expect(() => repo.edit('asset', name: ' '), throwsFormatException);
+    expect(
+        (await DBHelper.getAccounts())
+            .firstWhere((a) => a.id == 'broker')
+            .balance,
+        390);
+  });
+
   group('settlement of equities in reais', () {
     // Friday 20/11/2026 is a holiday: the trade counts from Monday 23, and
     // D+2 business days is Wednesday 25.

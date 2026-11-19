@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../investments/quote_refresh.dart';
 import '../investments/cdi_benchmark.dart';
 import '../investments/investment_models.dart';
 import '../investments/investment_repository.dart';
@@ -137,64 +138,15 @@ class _InvestmentsScreenState extends State<InvestmentsScreen> {
               'Consultas limitadas a uma rodada a cada 15 minutos. Os últimos valores continuam disponíveis.');
         return;
       }
-      final token = await InvestmentQuoteSettings.token();
-      var updated = 0;
-      // Every asset is tried: what failed is told at the end.
-      final problems = <String>[];
-      if (foreign.isNotEmpty) {
-        final source = SupabaseForeignQuotes.instance;
-        final fx = mounted ? context.read<AppProvider>().fxMicros('USD') : null;
-        if (source == null) {
-          problems.add(
-              'Cotação dos EUA precisa da sua conta em Sincronizar dispositivos.');
-        } else {
-          try {
-            final tickers = foreign.map((p) => p.investment.ticker).toSet();
-            final got = await source.fetch(tickers);
-            for (final p in foreign) {
-              final q = got[p.investment.ticker];
-              if (q == null) continue;
-              await repository.price(
-                  p.investment.id, q.priceMicros, q.date, 'mercado',
-                  fxMicros: fx);
-            }
-            updated += got.length;
-            final missing = tickers.difference(got.keys.toSet());
-            if (missing.isNotEmpty) {
-              problems.add(
-                  'Sem cotação para ${missing.join(', ')}. Confira o código ou informe o preço.');
-            }
-          } on QuoteFailure catch (e) {
-            problems.add(e.message);
-          }
-        }
-      }
-      // Deduplicate tickers and serialize requests for the free API plan.
-      final tickers = positions.map((p) => p.investment.ticker).toSet();
-      for (final ticker in tickers.take(20)) {
-        if (!mounted) break;
-        try {
-          final quote = await InvestmentQuotes().fetch(ticker, token: token);
-          if (quote.market != null) {
-            // Optional metadata must never prevent the core price update.
-            try {
-              await MarketCache.save(ticker, quote.market!);
-            } catch (_) {}
-          }
-          for (final p
-              in positions.where((p) => p.investment.ticker == ticker)) {
-            await repository.price(
-                p.investment.id, quote.priceMicros, quote.date, 'brapi');
-          }
-          updated++;
-        } on QuoteFailure catch (e) {
-          // One asset without a quote never stops the others.
-          problems.add('$ticker: ${e.message}');
-        }
-      }
+      final r = await QuoteRefresh.round(
+          b3: positions,
+          foreign: foreign,
+          usdFx: mounted ? context.read<AppProvider>().fxMicros('USD') : null,
+          alive: () => mounted);
+      final updated = r.updated, problems = r.problems;
       if (mounted)
         setState(() => _quoteStatus =
-            '$updated código(s) consultado(s). ${quoteProblems(problems) ?? (tickers.length > 20 ? 'Limite de 20 códigos por rodada.' : 'Confira a data de cada preço; cotações podem ter atraso.')}');
+            '$updated código(s) consultado(s). ${quoteProblems(problems) ?? (r.codes > QuoteRefresh.maxCodes ? 'Limite de 20 códigos por rodada.' : 'Confira a data de cada preço; cotações podem ter atraso.')}');
     } catch (_) {
       if (mounted)
         setState(() => _quoteStatus =
@@ -1232,6 +1184,13 @@ class _InvestmentDetailState extends State<_InvestmentDetail> {
                                               _PriceDialog(position: p)),
                                       icon: const Icon(Icons.edit_outlined),
                                       label: const Text('Informar preço')),
+                                  OutlinedButton.icon(
+                                      onPressed: () => showDialog<void>(
+                                          context: context,
+                                          builder: (_) => _EditAssetDialog(
+                                              investment: p.investment)),
+                                      icon: const Icon(Icons.badge_outlined),
+                                      label: const Text('Editar dados')),
                                 ]),
                                 const SizedBox(height: 20),
                                 if (p.quantity == 0)
@@ -1997,5 +1956,79 @@ class _QuoteSettingsDialogState extends State<_QuoteSettingsDialog> {
                         }
                       },
                 child: const Text('Salvar'))
+          ]);
+}
+
+/// Name, code and broker of an asset. Nothing about money changes here.
+class _EditAssetDialog extends StatefulWidget {
+  const _EditAssetDialog({required this.investment});
+  final Investment investment;
+  @override
+  State<_EditAssetDialog> createState() => _EditAssetDialogState();
+}
+
+class _EditAssetDialogState extends State<_EditAssetDialog> {
+  late final _name = TextEditingController(text: widget.investment.name);
+  late final _ticker = TextEditingController(text: widget.investment.ticker);
+  late final _broker =
+      TextEditingController(text: widget.investment.institution);
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _ticker.dispose();
+    _broker.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await InvestmentRepository().edit(widget.investment.id,
+          name: _name.text, ticker: _ticker.text, institution: _broker.text);
+      if (mounted) Navigator.pop(context);
+    } on FormatException {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error =
+              'Confira o nome e o código (letras e números, até 12 caracteres).';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+          title: const Text('Dados do ativo'),
+          content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'Nome')),
+            TextField(
+                controller: _ticker,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                    labelText: 'Código (ticker)', hintText: 'Ex.: ABCD3')),
+            TextField(
+                controller: _broker,
+                decoration: const InputDecoration(
+                    labelText: 'Corretora', hintText: 'Onde o ativo está')),
+            if (_error != null)
+              Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(_error!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error))),
+          ])),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar')),
+            FilledButton(
+                onPressed: _saving ? null : _save, child: const Text('Salvar')),
           ]);
 }

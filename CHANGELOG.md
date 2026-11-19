@@ -18,9 +18,12 @@
 ### Investir
 - **Liquidação na B3:** comprar ou vender ações, FIIs e ETFs em reais com conta vinculada cria o movimento de caixa como **pendente**, com vencimento no dia útil da liquidação (D+2, contando feriados). Pendente não mexe no saldo. No dia, ao abrir o app, ele vira pago sozinho e o saldo se move uma única vez, mesmo com dois aparelhos. A previsão de caixa já mostra o movimento no dia certo. Renda fixa, proventos e ativos no exterior continuam imediatos. Operação registrada depois da liquidação já entra paga.
 - **Conta do tipo Corretora:** nasce fora do saldo total (dá para mudar), entra no patrimônio e aparece em Investir como "Caixa na corretora". Investir também mostra o que está aguardando liquidação.
+- **Editar dados do ativo:** nome, código e corretora, sem mexer em quantidade nem dinheiro. Um ativo sem corretora comprado com uma conta do tipo Corretora passa a mostrar o nome dela.
+- **Cotação do dia com o app fechado:** uma vez por dia, depois das 18h, a checagem em segundo plano busca o fechamento de cada ativo com código (B3 e EUA, quando configurados). Cada preço guarda a data da cotação, mostrada na carteira.
 - Os feriados da B3 foram conferidos até 2026; um teste avisa quando o ano virar sem nova conferência. O prazo vigente é D+2; a B3 anunciou D+1 para fevereiro de 2028, ainda sem data final.
 ### Conector
 - `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
+- `update_investment`: corrige nome, código e corretora de um ativo. `add_account` aceita o tipo `broker` (Corretora).
 - `simulate_cash` (só leitura): a mesma simulação da tela Simular. `update_account` aceita `interest_monthly_percent` (exige esta versão do app).
 - `get_daily_digest` traz `unrecorded_yesterday`: os movimentos de ontem que ainda esperam você, sem o que o app resolve sozinho.
 - `confirm_suggestion` com `recurring_id` paga a recorrente pela cobrança do banco; `pay_recurring` com `transaction_id` liga a ocorrência a um lançamento que já existe (exigem esta versão do app).

@@ -5,6 +5,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../investments/quote_refresh.dart';
 import '../providers/app_provider.dart';
 import '../services/desktop_profile.dart';
 import '../services/diagnostics.dart';
@@ -93,6 +94,14 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
     // itself, and in the morning what yesterday left, become notices.
     if (headless && state != null) {
       await BankNotices.afterPass(state, started: started);
+    }
+    // The closing price of the day, once, after the B3 closes.
+    if (headless) {
+      try {
+        await QuoteRefresh.daily(usdFx: provider.fxMicros('USD'));
+      } catch (e) {
+        Diagnostics.note('cotações do dia', e);
+      }
     }
   } catch (e) {
     Diagnostics.note('bank pass', e);

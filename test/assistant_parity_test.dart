@@ -859,6 +859,23 @@ void main() {
     expect(await balance('bank'), 950);
     final positions = await InvestmentRepository().load();
     expect(positions.where((p) => !p.investment.archived), hasLength(1));
+    final (edited, _) = await send('investment.edit', {
+      'id': 'assistant-inv:old',
+      'ticker': 'abcd3f',
+      'institution': 'Corretora Exemplo'
+    });
+    expect(edited, 'done');
+    final old = (await InvestmentRepository().load())
+        .firstWhere((p) => p.investment.id == 'assistant-inv:old')
+        .investment;
+    expect([old.name, old.ticker, old.institution],
+        ['Posição antiga', 'ABCD3', 'Corretora Exemplo']);
+    expect(await balance('bank'), 950, reason: 'editing data moves no money');
+    expect(
+        (await send('investment.edit',
+                {'id': 'assistant-inv:old', 'ticker': 'não vale!'}))
+            .$1,
+        'rejected');
   });
 
   test('variable budget: base plus profit, by settings, on every device',

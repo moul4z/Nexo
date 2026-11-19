@@ -89,8 +89,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       unawaited(AutoBackup.runIfDue());
       unawaited(LedgerAudit.runIfDue());
       // Trades whose settlement day came leave pending (Investir).
-      unawaited(InvestmentRepository().settleDue().then((_) {},
-          onError: (Object e) => Diagnostics.note('liquidação', e)));
+      final app = context.read<AppProvider>();
+      unawaited(InvestmentRepository().settleDue().then((n) {
+        if (n > 0) return app.refreshInvestmentCash();
+      }, onError: (Object e) => Diagnostics.note('liquidação', e)));
     }
     final pluggy = PluggyInbox.instance;
     if (pluggy == null || !await pluggy.refreshInBackground()) return;

@@ -180,6 +180,13 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
     inputSchema: obj({ id: idField, archived: { type: "boolean" } }, ["id"]),
   },
   {
+    name: "update_investment", title: "Corrigir dados do ativo",
+    description: "Corrige nome, código (ticker) e corretora de um ativo (ids em get_investments). Quantidades, operações e dinheiro não mudam. Corretora vazia tira a corretora.",
+    inputSchema: obj({ id: idField, name: { type: "string", minLength: 1, maxLength: 120 },
+      ticker: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9.\\-]{0,11}$" },
+      institution: { type: "string", maxLength: 120, description: "Corretora ou banco onde o ativo está" } }, ["id"]),
+  },
+  {
     name: "delete_investment_operation", title: "Apagar operação de investimento",
     description: "Apaga uma compra, venda ou provento (ids em get_investments). A conta vinculada é estornada junto.",
     destructive: true,
@@ -575,7 +582,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           objetivos: { read: ["get_goals"], write: ["add_goal", "update_goal", "move_goal", "delete_goal"], editable: ["name", "target", "target_date", "completed", "color"] },
           recorrentes: { read: ["get_recurring", "get_upcoming_bills"], write: ["add_recurring", "update_recurring", "pay_recurring", "skip_recurring", "delete_recurring"],
             editable: ["name", "amount", "account_id", "category_id", "next_date", "end_date", "frequency", "every", "kind", "notes", "reminder_enabled", "reminder_time"] },
-          investimentos: { read: ["get_investment_summary", "get_investments"], write: ["add_investment", "record_investment_operation", "update_investment_price", "archive_investment", "delete_investment_operation", "link_investment_operation"] },
+          investimentos: { read: ["get_investment_summary", "get_investments"], write: ["add_investment", "record_investment_operation", "update_investment_price", "update_investment", "archive_investment", "delete_investment_operation", "link_investment_operation"] },
           empréstimos: { read: ["get_loans"], write: ["add_loan", "update_loan", "delete_loan", "pay_loan_installment", "skip_loan_installment", "delete_loan_payment"] },
           emprestado_e_devido: { read: ["get_lended"], write: ["add_lended", "update_lended", "settle_lended", "delete_lended", "update_person", "delete_person"] },
           bens_e_desejos: { read: ["get_assets", "get_wishlist"], write: ["add_asset", "update_asset", "delete_asset", "add_wishlist_item", "update_wishlist_item", "delete_wishlist_item"] },
@@ -846,6 +853,28 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         if (qty !== 0) throw new ToolInputError("Encerre a posição (venda tudo) antes de retirá-la da carteira.");
       }
       return pending((await enqueue("investment.archive", { id: text(inv.id), archived })).id, archived ? "Retirada da carteira" : "Volta à carteira");
+    }
+    case "update_investment": {
+      only(args, ["id", "name", "ticker", "institution"]);
+      const inv = find(l.investments, args.id);
+      if (!inv) throw new ToolInputError("Investimento não encontrado. Use get_investments.");
+      const body: Args = { id: text(inv.id) };
+      if (args.name !== undefined) {
+        if (typeof args.name !== "string" || !args.name.trim() || args.name.length > 120) throw new ToolInputError("name: de 1 a 120 letras.");
+        body.name = args.name.trim();
+      }
+      if (args.ticker !== undefined) {
+        if (typeof args.ticker !== "string" || !/^[A-Za-z0-9][A-Za-z0-9.\-]{0,11}$/.test(args.ticker.trim())) {
+          throw new ToolInputError("ticker: letras e números, até 12 caracteres.");
+        }
+        body.ticker = args.ticker.trim().toUpperCase();
+      }
+      if (args.institution !== undefined) {
+        if (typeof args.institution !== "string" || args.institution.length > 120) throw new ToolInputError("institution: até 120 letras.");
+        body.institution = args.institution.trim();
+      }
+      if (Object.keys(body).length === 1) throw new ToolInputError("Informe name, ticker ou institution.");
+      return pending((await enqueue("investment.edit", body)).id, "Dados do ativo");
     }
     case "delete_investment_operation":
     case "link_investment_operation": {

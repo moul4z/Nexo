@@ -69,6 +69,7 @@ const appWriteActions = <String, List<String>>{
   'investment.record': ['record_investment_operation'],
   'investment.price': ['update_investment_price'],
   'investment.archive': ['archive_investment'],
+  'investment.edit': ['update_investment'],
   'investment.remove_operation': ['delete_investment_operation'],
   'investment.link_cash': ['link_investment_operation'],
   // Loans, money lent, people
@@ -112,6 +113,8 @@ const appInternalWrites = <String, String>{
   'setting.seed':
       'copia para o acervo as configurações que o aparelho já tinha',
   'gold.refresh': 'recalcula contas em ouro pela cotação; nunca é decisão',
+  'investment.settle':
+      'paga sozinho, no dia útil da liquidação, o caixa de uma compra ou venda que estava pendente',
   'investment.fx':
       'atualiza o câmbio do dia dos ativos em dólar, como a cotação; cada aparelho lê o seu',
   'bootstrap.normalize': 'ajuste automático da abertura do app',

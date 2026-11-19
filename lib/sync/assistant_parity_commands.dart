@@ -31,7 +31,8 @@ class AssistantParityCommands {
     'transaction.bulk_delete', 'transaction.neutralize', 'transaction.split',
     'transaction.split_bill', 'lended.receive',
     'budget.save', 'account.edit', 'goal.adjust', 'goal.edit',
-    'recurring.edit', 'investment.archive', 'investment.unrecord',
+    'recurring.edit', 'investment.archive', 'investment.edit',
+    'investment.unrecord',
     'investment.link', 'loan.add', 'loan.edit', 'loan.delete', 'loan.unpay',
     'lended.edit', 'lended.delete', 'person.edit', 'person.delete',
     'rule.save', 'rule.delete', 'suggestion.transfer', 'suggestion.accept',
@@ -535,6 +536,13 @@ class AssistantParityCommands {
               ? 'De volta à carteira.'
               : 'Retirado da carteira (histórico mantido).'
         };
+      case 'investment.edit':
+        await investments.edit(a['id'] as String,
+            name: a['name'] as String?,
+            ticker: a['ticker'] as String?,
+            institution: a['institution'] as String?);
+        await app.refreshInvestmentCash();
+        return {'message': 'Dados do ativo corrigidos.'};
       case 'investment.unrecord':
         final id = a['operation_id'] as String;
         if (!(await investments.load())
