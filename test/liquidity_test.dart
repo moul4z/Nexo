@@ -6,6 +6,13 @@ import 'package:nexo/services/liquidity.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('the market holidays were checked for this year', () {
+    expect(
+        DateTime.now().year, lessThanOrEqualTo(marketHolidaysReviewedThrough),
+        reason: 'Check the B3 calendar for the new year, update '
+            'marketHolidays() and settlement.ts, then raise '
+            'marketHolidaysReviewedThrough.');
+  });
   test('Easter and the movable holidays of 2026', () {
     expect(easter(2026), DateTime(2026, 4, 5));
     final h = marketHolidays(2026);

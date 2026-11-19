@@ -251,4 +251,75 @@ void main() {
     expect((await DBHelper.getAccounts()).single.type, 'bank');
     app.dispose();
   });
+
+  group('settlement of equities in reais', () {
+    // Friday 20/11/2026 is a holiday: the trade counts from Monday 23, and
+    // D+2 business days is Wednesday 25.
+    final trade = DateTime(2026, 11, 20, 15);
+    InvestmentOperation on(String id, String kind, int cents) =>
+        InvestmentOperation(
+            id: id,
+            investmentId: 'asset',
+            kind: kind,
+            quantity: kind == 'income' ? 0 : 10 * investmentScale,
+            cents: cents,
+            date: trade,
+            createdAt: trade,
+            cashAccountId: 'bank');
+    tearDown(() => InvestmentRepository.clock = DateTime.now);
+
+    test('pending until the business day; then paid once, on every pass',
+        () async {
+      InvestmentRepository.clock = () => trade;
+      await repo.create(asset(), on('buy', 'buy', 10000));
+      expect(await balance(), 1000, reason: 'pending never moves the balance');
+      final meta = await TransactionMetadataService.instance
+          .getFor(InvestmentRepository.cashId('buy'));
+      expect(meta.status, 'pending');
+      expect(meta.dueDate, DateTime(2026, 11, 25));
+      InvestmentRepository.clock = () => DateTime(2026, 11, 24, 23);
+      expect(await repo.settleDue(), 0);
+      expect(await balance(), 1000);
+      InvestmentRepository.clock = () => DateTime(2026, 11, 25, 8);
+      expect(await repo.settleDue(), 1);
+      expect(await balance(), 900);
+      expect(await repo.settleDue(), 0,
+          reason: 'a second pass changes nothing');
+      expect(await balance(), 900);
+      final paid = await TransactionMetadataService.instance
+          .getFor(InvestmentRepository.cashId('buy'));
+      expect(paid.status, 'paid');
+      InvestmentRepository.validateCashBackup(await DBHelper.exportAll());
+    });
+
+    test('removing a trade still pending gives back nothing it never took',
+        () async {
+      InvestmentRepository.clock = () => trade;
+      await repo.create(asset(), on('buy', 'buy', 10000));
+      await repo.record(on('sell', 'sell', 4000));
+      expect(await balance(), 1000);
+      InvestmentRepository.validateCashBackup(await DBHelper.exportAll());
+      await repo.removeOperation('sell');
+      expect(await balance(), 1000);
+      expect((await DBHelper.getTransactions()).map((t) => t.id),
+          [InvestmentRepository.cashId('buy')]);
+    });
+
+    test('fixed income, dividends and a trade already settled move at once',
+        () async {
+      InvestmentRepository.clock = () => DateTime(2026, 12, 1);
+      await repo.create(asset(), on('buy', 'buy', 10000));
+      expect(await balance(), 900, reason: 'recorded after the settlement day');
+      await repo.record(on('income', 'income', 500));
+      expect(await balance(), 905);
+      expect(
+          InvestmentRepository.settlementDay(
+              on('x', 'buy', 1), 'Renda fixa', 'BRL'),
+          isNull);
+      expect(
+          InvestmentRepository.settlementDay(on('x', 'buy', 1), 'Ações', 'USD'),
+          isNull,
+          reason: 'abroad stays immediate');
+    });
+  });
 }

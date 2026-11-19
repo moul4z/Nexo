@@ -54,6 +54,8 @@ class AssistantMoreCommands {
             balance: _reais(a['balance_cents'] ?? 0),
             currency: a['currency'] as String? ?? app.settings.currency,
             colorValue: _palette[app.accounts.length % _palette.length],
+            // Money at the broker is wealth, not available to spend.
+            excludeFromTotal: type == 'broker',
             statementDay: type == 'credit' ? a['statement_day'] as int? : null,
             dueDay: type == 'credit' ? a['due_day'] as int? : null,
             creditLimit: type == 'credit' && a['credit_limit_cents'] != null

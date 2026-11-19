@@ -20,6 +20,12 @@ DateTime easter(int year) {
   return DateTime(year, month, day);
 }
 
+/// The last year whose holidays below were checked against the B3 trading
+/// calendar. test/liquidity_test.dart fails once the current year passes it:
+/// check the calendar (a new national holiday, like 20/11 from 2024), keep
+/// supabase/functions/nexo-mcp/settlement.ts the same, and raise it.
+const marketHolidaysReviewedThrough = 2026;
+
 /// Days without settlement in the Brazilian market: national holidays,
 /// Carnival, Good Friday, Corpus Christi and the B3 closings on 24 and 31
 /// December. Computed on the device; no network needed.
@@ -63,7 +69,9 @@ DateTime addBusinessDays(DateTime d, int n) {
 // ── When money becomes available ─────────────────────────────────────────
 
 /// How a kind of asset turns into money. Equities settle in D+2 business
-/// days at B3 (configurable: B3 studies D+1); Tesouro Direto and daily
+/// days at B3 (checked 19/11/2026; B3 announced D+1 for February 2028, with
+/// no final date yet: when it is set, make [equityDays] depend on the trade
+/// date here and in settlement.ts); Tesouro Direto and daily
 /// liquidity fixed income pay the same day when sold before 13:00 on a
 /// business day; reserves in the Nexo are immediate. Unknown kinds give no
 /// date instead of a guess.

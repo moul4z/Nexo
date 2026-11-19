@@ -182,6 +182,7 @@ class _AccountTile extends StatelessWidget {
         'cash' => 'Dinheiro',
         'savings' => 'Poupança',
         'wallet' => 'Carteira eletrônica',
+        'broker' => 'Corretora',
         'gold' => 'Ouro / ativo',
         _ => 'Conta',
       };
@@ -465,6 +466,7 @@ IconData _accountIcon(String type) => switch (type) {
       'cash' => Icons.payments_outlined,
       'savings' => Icons.savings_outlined,
       'wallet' => Icons.account_balance_wallet_outlined,
+      'broker' => Icons.candlestick_chart_outlined,
       'gold' => Icons.diamond_outlined,
       'credit' => Icons.credit_card_outlined,
       'debit' => Icons.credit_card_outlined,
@@ -753,6 +755,11 @@ class _AccountEditorState extends State<_AccountEditor> {
                                   'Carteira',
                                   Icons.account_balance_wallet_outlined
                                 ),
+                                (
+                                  'broker',
+                                  'Corretora',
+                                  Icons.candlestick_chart_outlined
+                                ),
                                 // Legacy type: offered only to who already uses it.
                                 if (_type == 'gold')
                                   (
@@ -765,8 +772,14 @@ class _AccountEditorState extends State<_AccountEditor> {
                               selected: _type == option.$1,
                               avatar: Icon(option.$3, size: 18),
                               label: Text(option.$2),
-                              onSelected: (_) =>
-                                  setState(() => _type = option.$1),
+                              onSelected: (_) => setState(() {
+                                _type = option.$1;
+                                // Money waiting at the broker is wealth, not
+                                // what is available to spend (changeable).
+                                if (!isEdit && option.$1 == 'broker') {
+                                  _excludeFromTotal = true;
+                                }
+                              }),
                             ))
                         .toList(),
                   ),
@@ -933,8 +946,9 @@ class _AccountEditorState extends State<_AccountEditor> {
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Não incluir no saldo total'),
-                      subtitle: const Text(
-                          'Útil para contas separadas, valores de terceiros ou controles auxiliares.'),
+                      subtitle: Text(_type == 'broker'
+                          ? 'O dinheiro parado na corretora entra no patrimônio e aparece em Investir, fora do que está disponível para gastar.'
+                          : 'Útil para contas separadas, valores de terceiros ou controles auxiliares.'),
                       value: _excludeFromTotal,
                       onChanged: (value) =>
                           setState(() => _excludeFromTotal = value),

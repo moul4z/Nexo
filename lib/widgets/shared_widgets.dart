@@ -253,6 +253,8 @@ class AccountTypeIcon extends StatelessWidget {
         return Icons.credit_card_outlined;
       case 'wallet':
         return Icons.account_balance_wallet_outlined;
+      case 'broker':
+        return Icons.candlestick_chart_outlined;
       case 'gold':
         return Icons.diamond_outlined;
       default:

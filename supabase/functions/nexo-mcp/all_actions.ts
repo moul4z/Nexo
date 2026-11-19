@@ -39,7 +39,7 @@ const idField = { type: "string" };
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
   type: "object", properties, required, additionalProperties: false,
 });
-const accountTypes = ["bank", "cash", "savings", "wallet", "credit", "debit"];
+const accountTypes = ["bank", "cash", "savings", "wallet", "broker", "credit", "debit"];
 
 export const readOnlyAll = new Set(["get_card_invoices", "get_investments", "get_loans", "get_lended", "get_assets", "get_wishlist"]);
 

@@ -283,6 +283,7 @@ class FinanceExportService {
               'bank': 'Banco',
               'cash': 'Dinheiro',
               'wallet': 'Carteira',
+              'broker': 'Corretora',
               'savings': 'Poupança',
               'credit': 'Cartão',
               'gold': 'Ouro'

@@ -935,6 +935,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                           'cash' => 'Dinheiro',
                           'savings' => 'Poupança',
                           'wallet' => 'Carteira',
+                          'broker' => 'Corretora',
                           'credit' => 'Cartão de crédito',
                           'debit' => 'Cartão de débito',
                           _ => 'Conta',

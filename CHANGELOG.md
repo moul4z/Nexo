@@ -15,6 +15,10 @@
 - **Simular** (Mais e Ctrl+K): teste uma saída, uma entrada, a venda de um bem, a venda de um investimento (o dinheiro cai na liquidação: ações, FIIs e ETFs em 2 dias úteis, renda fixa no mesmo dia útil) ou pagar só parte da fatura. A tela mostra o menor saldo, quanto faltaria e a diferença no fim do período. Nada é gravado.
 - **Juros do rotativo no cartão:** campo "Juros do rotativo (% ao mês)" no cadastro do cartão. No pagamento parcial simulado, o resto vai para a fatura seguinte com um mês de juros, marcado como estimativa. "Usar o pagamento mínimo" usa o número do banco quando o Open Finance traz, senão o mínimo cadastrado.
 - Uma conta pendente já vencida entra na previsão de hoje, e a fatura paga por uma conta fora do total não sai do caixa, no app e no Claude. Os dois cálculos agora rodam contra os mesmos casos (`test/fixtures/forecast_cases.json`).
+### Investir
+- **Liquidação na B3:** comprar ou vender ações, FIIs e ETFs em reais com conta vinculada cria o movimento de caixa como **pendente**, com vencimento no dia útil da liquidação (D+2, contando feriados). Pendente não mexe no saldo. No dia, ao abrir o app, ele vira pago sozinho e o saldo se move uma única vez, mesmo com dois aparelhos. A previsão de caixa já mostra o movimento no dia certo. Renda fixa, proventos e ativos no exterior continuam imediatos. Operação registrada depois da liquidação já entra paga.
+- **Conta do tipo Corretora:** nasce fora do saldo total (dá para mudar), entra no patrimônio e aparece em Investir como "Caixa na corretora". Investir também mostra o que está aguardando liquidação.
+- Os feriados da B3 foram conferidos até 2026; um teste avisa quando o ano virar sem nova conferência. O prazo vigente é D+2; a B3 anunciou D+1 para fevereiro de 2028, ainda sem data final.
 ### Conector
 - `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
 - `simulate_cash` (só leitura): a mesma simulação da tela Simular. `update_account` aceita `interest_monthly_percent` (exige esta versão do app).

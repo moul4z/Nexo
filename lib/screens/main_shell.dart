@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import '../services/diagnostics.dart';
+import '../investments/investment_repository.dart';
 import '../services/auto_backup.dart';
 import '../services/ledger_audit.dart';
 import 'package:provider/provider.dart';
@@ -86,6 +88,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
       unawaited(AutoBackup.runIfDue());
       unawaited(LedgerAudit.runIfDue());
+      // Trades whose settlement day came leave pending (Investir).
+      unawaited(InvestmentRepository().settleDue().then((_) {},
+          onError: (Object e) => Diagnostics.note('liquidação', e)));
     }
     final pluggy = PluggyInbox.instance;
     if (pluggy == null || !await pluggy.refreshInBackground()) return;

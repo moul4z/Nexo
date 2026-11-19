@@ -22,6 +22,8 @@ export function minBuildFor(kind: string, args: Record<string, unknown>): number
   if ((kind === "recurring.add" || kind === "recurring.edit") && "iof_percent" in args) return RECURRING_BANK_BUILD;
   // An older app would change the card and drop its revolving interest.
   if (kind === "account.edit" && "interest_monthly_percent" in args) return RECURRING_BANK_BUILD;
+  // An older app would count the broker's cash as available to spend.
+  if (kind === "account.add" && args.type === "broker") return RECURRING_BANK_BUILD;
   if (kind === "rule.save" && (args.auto === true || args.type === "transfer" || args.type === "internal")) {
     return RECONCILE_BUILD;
   }

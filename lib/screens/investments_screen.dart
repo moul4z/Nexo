@@ -268,6 +268,38 @@ class _InvestmentsScreenState extends State<InvestmentsScreen> {
                         .contains(_search.toLowerCase()))
                 .toList()
               ..sort((a, b) => b.value.compareTo(a.value));
+            List<Widget> brokerCash(BuildContext context) {
+              final app = context.read<AppProvider>();
+              final brokers =
+                  app.accounts.where((a) => a.type == 'broker').toList();
+              final waiting = app.transactions
+                  .where((t) =>
+                      t.id.startsWith('investment:') &&
+                      app.transactionMetadata[t.id]?.isPending == true)
+                  .toList();
+              if (brokers.isEmpty && waiting.isEmpty) return const [];
+              final cash = brokers.fold<double>(
+                  0, (s, a) => s + app.convertToMain(a.balance, a.currency));
+              final net = waiting.fold<double>(
+                  0,
+                  (s, t) =>
+                      s +
+                      app.convertToMain(
+                          t.type == 'expense' ? -t.amount : t.amount,
+                          t.currency.isEmpty
+                              ? app.settings.currency
+                              : t.currency));
+              return [
+                const SizedBox(height: 8),
+                if (brokers.isNotEmpty)
+                  Text(
+                      'Caixa na corretora: ${_money(context, (cash * 100).round())}, fora do disponível para gastar.'),
+                if (waiting.isNotEmpty)
+                  Text(
+                      'Aguardando liquidação: ${waiting.length == 1 ? '1 operação' : '${waiting.length} operações'} (${net >= 0 ? '+' : '−'} ${_money(context, (net.abs() * 100).round())}). O dinheiro entra ou sai da conta no dia útil da B3.'),
+              ];
+            }
+
             int sum(int Function(InvestmentPosition) pick) =>
                 all.fold(0, (v, p) => v + pick(p));
             final groups = portfolioGroups(all, _groupBy);
@@ -317,6 +349,7 @@ class _InvestmentsScreenState extends State<InvestmentsScreen> {
                                         const SizedBox(height: 8),
                                         const Text(
                                             'Variação sobre o custo da posição atual, sem vendas e proventos. Não é o rendimento do dia.'),
+                                        ...brokerCash(context),
                                       ])),
                               if (all.any((p) => p.operations.isNotEmpty)) ...[
                                 const SizedBox(height: 16),

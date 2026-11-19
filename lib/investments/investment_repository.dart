@@ -4,11 +4,16 @@ import 'package:sqflite/sqflite.dart';
 import '../database/db_helper.dart';
 import 'investment_models.dart';
 import '../models/models.dart';
+import '../services/liquidity.dart';
 import '../services/transaction_metadata_service.dart';
 import '../sync/ledger_capture.dart';
 
 class InvestmentRepository {
   static final revision = ValueNotifier<int>(0);
+
+  /// Today, replaceable in tests.
+  @visibleForTesting
+  static DateTime Function() clock = DateTime.now;
   final Future<Database> Function() database;
   InvestmentRepository({Future<Database> Function()? database})
       : database = database ?? (() => DBHelper.database);
@@ -82,7 +87,8 @@ class InvestmentRepository {
     await ledgerTransaction(db, 'investment.create', (tx) async {
       await tx.insert('investments', item.toMap());
       await tx.insert('investment_operations', opening.toMap());
-      await _cash(tx, opening, item.name, currency: item.currency);
+      await _cash(tx, opening, item.name,
+          currency: item.currency, assetClass: item.assetClass);
     });
     revision.value++;
   }
@@ -112,7 +118,8 @@ class InvestmentRepository {
           [...entries.map(InvestmentOperation.fromMap), op]);
       await tx.insert('investment_operations', op.toMap());
       await _cash(tx, op, rows.single['name'] as String,
-          currency: rows.single['currency'] as String? ?? 'BRL');
+          currency: rows.single['currency'] as String? ?? 'BRL',
+          assetClass: rows.single['asset_class'] as String? ?? '');
       await tx.update('investments', {'archived': 0},
           where: 'id=?', whereArgs: [op.investmentId]);
     });
@@ -142,11 +149,19 @@ class InvestmentRepository {
           throw const FormatException(
               'Movimentação vinculada inconsistente. Nenhum valor foi alterado.');
         }
-        final changed = await tx.rawUpdate(
-            'UPDATE accounts SET balance=balance+? WHERE id=?', [
-          cashDebit(op) ? op.cents / 100 : -op.cents / 100,
-          op.cashAccountId
-        ]);
+        // Still waiting for the settlement: the balance never moved.
+        final status = await tx.query('transaction_metadata',
+            columns: ['status'],
+            where: 'transaction_id=?',
+            whereArgs: [cashId(op.id)]);
+        final settled = status.isEmpty || status.single['status'] != 'pending';
+        final changed = !settled
+            ? 1
+            : await tx.rawUpdate(
+                'UPDATE accounts SET balance=balance+? WHERE id=?', [
+                cashDebit(op) ? op.cents / 100 : -op.cents / 100,
+                op.cashAccountId
+              ]);
         if (changed != 1)
           throw const FormatException('Conta vinculada não encontrada.');
         await tx.delete('transaction_metadata',
@@ -203,7 +218,8 @@ class InvestmentRepository {
           tx['type'] != (cashDebit(op) ? 'expense' : 'income') ||
           meta == null ||
           meta['source'] != id ||
-          meta['status'] != 'paid' ||
+          !(meta['status'] == 'paid' ||
+              (meta['status'] == 'pending' && meta['due_date'] != null)) ||
           meta['affects_balance'] != 1 ||
           meta['exclude_from_spending'] != (op.kind == 'income' ? 0 : 1)) {
         throw const FormatException(
@@ -249,8 +265,21 @@ class InvestmentRepository {
   /// Money for an asset leaves and returns in the asset's own currency: a
   /// dollar stock moves a dollar account, and changing reais into dollars is
   /// a separate step (an exchange between accounts).
+  /// When the cash of a trade reaches the account: equities bought or sold
+  /// in reais settle on a later business day (B3); everything else, and
+  /// assets abroad, at once. Null = at once.
+  static DateTime? settlementDay(
+      InvestmentOperation op, String assetClass, String currency) {
+    if (currency != 'BRL' || (op.kind != 'buy' && op.kind != 'sell')) {
+      return null;
+    }
+    if (!const {'Ações', 'FIIs', 'ETFs'}.contains(assetClass)) return null;
+    return const SettlementRule().availableOn(
+        assetClass, DateTime(op.date.year, op.date.month, op.date.day, 10));
+  }
+
   Future<void> _cash(DatabaseExecutor tx, InvestmentOperation op, String name,
-      {required String currency}) async {
+      {required String currency, required String assetClass}) async {
     if (op.cashAccountId == null) return;
     op.validate();
     final accounts = await tx
@@ -265,6 +294,12 @@ class InvestmentRepository {
     final type = cashDebit(op) ? 'expense' : 'income';
     final categoryId = await _cashCategory(tx, type);
     final id = cashId(op.id);
+    // Until the settlement day the cash is pending: it does not move the
+    // balance, and the forecast shows it on that day. settleDue() pays it.
+    final now = clock();
+    final settles = settlementDay(op, assetClass, currency);
+    final pending = settles != null &&
+        settles.isAfter(DateTime(now.year, now.month, now.day));
     await tx.insert(
         'transactions',
         AppTransaction(
@@ -285,9 +320,48 @@ class InvestmentRepository {
           transactionId: id,
           source: id,
           excludeFromSpending: op.kind != 'income',
+          status: pending ? 'pending' : 'paid',
+          dueDate: pending ? settles : null,
         ).toMap());
+    if (pending) return;
     await tx.rawUpdate('UPDATE accounts SET balance=balance+? WHERE id=?',
         [cashDebit(op) ? -op.cents / 100 : op.cents / 100, op.cashAccountId]);
+  }
+
+  /// Pays the trades whose settlement day came: the pending entry becomes
+  /// paid and the balance moves, in the same commit. The same id on every
+  /// device, and only a pending one changes: a device that finds it paid
+  /// does nothing. Returns how many were settled.
+  Future<int> settleDue() async {
+    final now = clock();
+    final today = DateTime(now.year, now.month, now.day);
+    final db = await database();
+    const due = 'SELECT t.id, t.type, t.amount, t.account_id, m.due_date '
+        'FROM transactions t JOIN transaction_metadata m '
+        'ON m.transaction_id = t.id '
+        "WHERE t.id LIKE 'investment:%' AND m.status = 'pending'";
+    bool ready(Map<String, Object?> r) {
+      final d = DateTime.tryParse(r['due_date'] as String? ?? '');
+      return d != null && !DateTime(d.year, d.month, d.day).isAfter(today);
+    }
+
+    if (!(await db.rawQuery(due)).any(ready)) return 0;
+    var settled = 0;
+    await ledgerTransaction(db, 'investment.settle', (tx) async {
+      for (final r in (await tx.rawQuery(due)).where(ready)) {
+        final changed = await tx.rawUpdate(
+            "UPDATE transaction_metadata SET status = 'paid' "
+            "WHERE transaction_id = ? AND status = 'pending'",
+            [r['id']]);
+        if (changed != 1) continue;
+        final amount = (r['amount'] as num).toDouble();
+        await tx.rawUpdate('UPDATE accounts SET balance=balance+? WHERE id=?',
+            [r['type'] == 'expense' ? -amount : amount, r['account_id']]);
+        settled++;
+      }
+    });
+    if (settled > 0) revision.value++;
+    return settled;
   }
 
   /// Explicit reconciliation only. Existing operations remain unlinked until
@@ -310,7 +384,8 @@ class InvestmentRepository {
               where: 'id=?', whereArgs: [op.investmentId]))
           .single;
       await _cash(tx, op, asset['name'] as String,
-          currency: asset['currency'] as String? ?? 'BRL');
+          currency: asset['currency'] as String? ?? 'BRL',
+          assetClass: asset['asset_class'] as String? ?? '');
       await tx.update('investment_operations', {'cash_account_id': accountId},
           where: 'id=?', whereArgs: [operationId]);
     });
