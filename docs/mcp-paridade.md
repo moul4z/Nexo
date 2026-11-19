@@ -97,6 +97,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Configurações | get_settings, set_setting | ok | semana, alertas, lembrete diário, tema, cor, fonte, vibração, nome, moeda, esconder valores |
 | Análises: por categoria, agrupado | get_spending_by_category, get_spending_breakdown | ok | conta, subcategoria, dia da semana, tipo de gasto, estabelecimento |
 | Análises: tendência, patrimônio, projeção | get_monthly_trend, get_net_worth, get_cash_projection | ok | taxa de poupança, menor saldo previsto |
+| Simular (Mais e Ctrl+K) | simulate_cash (só leitura) | ok | 1.19: entrada, saída, venda de bem, venda de investimento na liquidação, pagamento parcial de fatura com juros do rotativo (`interest_monthly_percent` em update_account); nada é gravado |
 | Pedidos do Claude: situação, lista | get_request_status, list_requests | ok | |
 | Desfazer pedido | undo_request; botão Desfazer no app | ok | recusa se algo mudou depois |
 | Registro "feito pelo Claude" no app | Sincronizar dispositivos › Feito pelo Claude | ok | |

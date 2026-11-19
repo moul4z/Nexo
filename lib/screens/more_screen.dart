@@ -1,3 +1,4 @@
+import 'simulate_screen.dart';
 import 'package:flutter/material.dart';
 import '../widgets/nexo_ui.dart';
 import 'package:provider/provider.dart';
@@ -73,6 +74,11 @@ class MoreScreen extends StatelessWidget {
           label: 'Agenda financeira',
           sub: 'Próximos vencimentos, receitas, parcelas e faturas',
           screen: AgendaScreen()),
+      const _Item(
+          icon: Icons.calculate_outlined,
+          label: 'Simular',
+          sub: 'E se eu comprar, vender ou pagar só parte da fatura?',
+          screen: SimulateScreen()),
       const _Item(
         icon: Icons.upload_file_rounded,
         label: 'Importar extrato',
@@ -160,6 +166,7 @@ class MoreScreen extends StatelessWidget {
         const groups = <String, List<String>>{
           'Planejar e acompanhar': [
             'Agenda financeira',
+            'Simular',
             'Contas e cartões',
             'Recorrentes e assinaturas',
             'Análises',

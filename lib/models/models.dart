@@ -22,6 +22,10 @@ class Account {
   final double? creditLimit;
   final double? minPaymentAmount;
   final double? minPaymentPercent;
+
+  /// Revolving credit interest, % a month, as the person entered it (used
+  /// only to estimate in the simulator).
+  final double? interestMonthlyPercent;
   final bool creditReminderEnabled;
   final String creditReminderTime;
   final bool creditEarlyReminderEnabled;
@@ -48,6 +52,7 @@ class Account {
     this.creditLimit,
     this.minPaymentAmount,
     this.minPaymentPercent,
+    this.interestMonthlyPercent,
     this.creditReminderEnabled = false,
     this.creditReminderTime = '09:00',
     this.creditEarlyReminderEnabled = false,
@@ -78,6 +83,7 @@ class Account {
         'credit_limit': creditLimit,
         'min_payment_amount': minPaymentAmount,
         'min_payment_percent': minPaymentPercent,
+        'interest_monthly_percent': interestMonthlyPercent,
         'credit_reminder_enabled': creditReminderEnabled ? 1 : 0,
         'credit_reminder_time': creditReminderTime,
         'credit_early_reminder_enabled': creditEarlyReminderEnabled ? 1 : 0,
@@ -107,6 +113,8 @@ class Account {
         creditLimit: (m['credit_limit'] as num?)?.toDouble(),
         minPaymentAmount: (m['min_payment_amount'] as num?)?.toDouble(),
         minPaymentPercent: (m['min_payment_percent'] as num?)?.toDouble(),
+        interestMonthlyPercent:
+            (m['interest_monthly_percent'] as num?)?.toDouble(),
         creditReminderEnabled: (m['credit_reminder_enabled'] as int? ?? 0) == 1,
         creditReminderTime: m['credit_reminder_time'] as String? ?? '09:00',
         creditEarlyReminderEnabled:
@@ -133,6 +141,7 @@ class Account {
     double? creditLimit,
     double? minPaymentAmount,
     double? minPaymentPercent,
+    double? interestMonthlyPercent,
     bool? creditReminderEnabled,
     String? creditReminderTime,
     bool? creditEarlyReminderEnabled,
@@ -141,6 +150,7 @@ class Account {
     bool clearGold = false,
     bool clearCredit = false,
     bool clearLinkedAccount = false,
+    bool clearInterest = false,
   }) =>
       Account(
         id: id,
@@ -166,6 +176,9 @@ class Account {
             clearCredit ? null : (minPaymentAmount ?? this.minPaymentAmount),
         minPaymentPercent:
             clearCredit ? null : (minPaymentPercent ?? this.minPaymentPercent),
+        interestMonthlyPercent: clearCredit || clearInterest
+            ? null
+            : (interestMonthlyPercent ?? this.interestMonthlyPercent),
         creditReminderEnabled:
             creditReminderEnabled ?? this.creditReminderEnabled,
         creditReminderTime: creditReminderTime ?? this.creditReminderTime,

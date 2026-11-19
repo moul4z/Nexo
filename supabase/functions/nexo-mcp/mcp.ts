@@ -66,6 +66,7 @@ export const instructions =
   "A cobrança de uma assinatura ou conta fixa vinda do banco (list_suggestions com resolution recurring) se confirma com " +
   "confirm_suggestion e recurring_id, nunca como lançamento solto: a recorrente avança. Uma ocorrência já lançada à mão se liga com " +
   "pay_recurring e transaction_id. " +
+  "Para 'e se eu…' (comprar, vender um investimento, pagar só parte da fatura) use simulate_cash: ele não grava nada. " +
   "Para acertar um saldo com o extrato use adjust_account_balance, nunca uma despesa ou " +
   "receita de ajuste; acertos antigos lançados como receita viram ajuste neutro com convert_to_balance_adjustment. " +
   "Retirar de um objetivo devolve dinheiro à conta; se a reserva era só contábil, use move_goal com move_money false. " +

@@ -12,9 +12,12 @@
 ### Previsão de caixa
 - **Quanto dá para gastar por dia:** a Agenda e previsão mostra até quanto por dia, a partir de amanhã, sem o saldo ficar negativo em nenhum dia até a data escolhida.
 - **Gasto do dia a dia (opcional):** "Incluir o gasto do dia a dia" soma a média das últimas 4 semanas, sem recorrentes, parcelas, gastos pontuais e neutros. O que sai da conta entra todo dia; o do cartão entra na fatura do ciclo. Tudo aparece como estimativa.
+- **Simular** (Mais e Ctrl+K): teste uma saída, uma entrada, a venda de um bem, a venda de um investimento (o dinheiro cai na liquidação: ações, FIIs e ETFs em 2 dias úteis, renda fixa no mesmo dia útil) ou pagar só parte da fatura. A tela mostra o menor saldo, quanto faltaria e a diferença no fim do período. Nada é gravado.
+- **Juros do rotativo no cartão:** campo "Juros do rotativo (% ao mês)" no cadastro do cartão. No pagamento parcial simulado, o resto vai para a fatura seguinte com um mês de juros, marcado como estimativa. "Usar o pagamento mínimo" usa o número do banco quando o Open Finance traz, senão o mínimo cadastrado.
 - Uma conta pendente já vencida entra na previsão de hoje, e a fatura paga por uma conta fora do total não sai do caixa, no app e no Claude. Os dois cálculos agora rodam contra os mesmos casos (`test/fixtures/forecast_cases.json`).
 ### Conector
 - `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
+- `simulate_cash` (só leitura): a mesma simulação da tela Simular. `update_account` aceita `interest_monthly_percent` (exige esta versão do app).
 - `get_daily_digest` traz `unrecorded_yesterday`: os movimentos de ontem que ainda esperam você, sem o que o app resolve sozinho.
 - `confirm_suggestion` com `recurring_id` paga a recorrente pela cobrança do banco; `pay_recurring` com `transaction_id` liga a ocorrência a um lançamento que já existe (exigem esta versão do app).
 - `list_suggestions` deixa de mostrar o que o banco não mostra mais.

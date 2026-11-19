@@ -66,13 +66,14 @@ export const allActions: (ToolDefinition & { destructive?: boolean })[] = [
     name: "update_account", title: "Alterar conta",
     description:
       "Muda nome, cor, se entra no saldo total ou no total dos bancos e, no cartão, fechamento, vencimento, limite, conta de " +
-      "pagamento, pagamento mínimo e lembrete (null tira o valor). Para o saldo use adjust_account_balance.",
+      "pagamento, pagamento mínimo, juros do rotativo e lembrete (null tira o valor). Para o saldo use adjust_account_balance.",
     inputSchema: obj({
       id: idField, name: { type: "string", minLength: 1, maxLength: 60 },
       statement_day: { type: ["integer", "null"], minimum: 1, maximum: 31 }, due_day: { type: ["integer", "null"], minimum: 1, maximum: 31 },
       credit_limit: { type: ["number", "null"], exclusiveMinimum: 0, maximum: 1000000000 }, exclude_from_total: { type: "boolean" },
       exclude_from_bank_total: { type: "boolean" }, payment_account_id: { type: ["string", "null"], description: "Conta de onde a fatura costuma ser paga" },
       min_payment: { type: ["number", "null"], minimum: 0 }, min_payment_percent: { type: ["number", "null"], minimum: 0, maximum: 100 },
+      interest_monthly_percent: { type: ["number", "null"], minimum: 0, maximum: 100, description: "Juros do rotativo do cartão, % ao mês (usado em simulate_cash)" },
       color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, reminder_enabled: { type: "boolean" },
       reminder_time: { type: "string", pattern: "^\\d{2}:\\d{2}$" },
     }, ["id"]),
@@ -325,17 +326,17 @@ export async function callAllAction(name: string, rawArgs: unknown, l: Ledger, t
     }
     case "update_account": {
       only(args, ["id", "name", "statement_day", "due_day", "credit_limit", "exclude_from_total", "exclude_from_bank_total",
-        "payment_account_id", "min_payment", "min_payment_percent", "color", "reminder_enabled", "reminder_time"]);
+        "payment_account_id", "min_payment", "min_payment_percent", "interest_monthly_percent", "color", "reminder_enabled", "reminder_time"]);
       const a = account(l, str(args, "id", 256));
       if (args.exclude_from_total !== undefined && typeof args.exclude_from_total !== "boolean") {
         throw new ToolInputError("exclude_from_total deve ser verdadeiro ou falso.");
       }
-      const newer = ["exclude_from_bank_total", "payment_account_id", "min_payment", "min_payment_percent", "color",
+      const newer = ["exclude_from_bank_total", "payment_account_id", "min_payment", "min_payment_percent", "interest_monthly_percent", "color",
         "reminder_enabled", "reminder_time"].some((k) => args[k] !== undefined) ||
         ["statement_day", "due_day", "credit_limit"].some((k) => args[k] === null);
       if (newer) {
         const credit = text(a.type) === "credit";
-        const cardOnly = ["statement_day", "due_day", "credit_limit", "payment_account_id", "min_payment", "min_payment_percent",
+        const cardOnly = ["statement_day", "due_day", "credit_limit", "payment_account_id", "min_payment", "min_payment_percent", "interest_monthly_percent",
           "reminder_enabled", "reminder_time"].filter((k) => args[k] !== undefined);
         if (!credit && cardOnly.length) throw new ToolInputError(`Só cartão de crédito tem: ${cardOnly.join(", ")}.`);
         const body: Args = { id: text(a.id) };
@@ -352,6 +353,11 @@ export async function callAllAction(name: string, rawArgs: unknown, l: Ledger, t
           const v = args.min_payment_percent;
           if (v !== null && (typeof v !== "number" || v < 0 || v > 100)) throw new ToolInputError("min_payment_percent de 0 a 100.");
           body.min_payment_percent = v;
+        }
+        if (args.interest_monthly_percent !== undefined) {
+          const v = args.interest_monthly_percent;
+          if (v !== null && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100)) throw new ToolInputError("interest_monthly_percent de 0 a 100.");
+          body.interest_monthly_percent = v;
         }
         if (args.payment_account_id !== undefined) {
           body.linked_account_id = args.payment_account_id === null ? null : text(account(l, str(args, "payment_account_id", 256), true).id);

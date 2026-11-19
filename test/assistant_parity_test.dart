@@ -571,8 +571,17 @@ void main() {
     expect([nu.linkedAccountId, nu.minPaymentAmount, nu.creditLimit],
         ['bank', 65, 800]);
     expect([nu.statementDay, nu.dueDay], [19, 26], reason: 'kept');
+    await send('account.edit', {'id': 'nu', 'interest_monthly_percent': 9.5});
+    expect(app.accountById('nu')!.interestMonthlyPercent, 9.5);
     await send('account.edit', {'id': 'nu', 'credit_limit_cents': null});
     expect(app.accountById('nu')!.creditLimit, isNull);
+    expect(app.accountById('nu')!.interestMonthlyPercent, 9.5,
+        reason: 'what is not sent is kept');
+    expect(
+        (await send(
+                'account.edit', {'id': 'bank', 'interest_monthly_percent': 3}))
+            .$1,
+        'rejected');
     expect((await send('account.edit', {'id': 'bank', 'due_day': 10})).$1,
         'rejected');
     expect(

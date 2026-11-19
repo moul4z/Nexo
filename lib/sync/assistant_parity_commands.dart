@@ -370,6 +370,7 @@ class AssistantParityCommands {
               'credit_limit_cents',
               'min_payment_cents',
               'min_payment_percent',
+              'interest_monthly_percent',
               'reminder_enabled',
               'reminder_time',
               'linked_account_id'
@@ -417,6 +418,10 @@ class AssistantParityCommands {
                 minPaymentPercent: a.containsKey('min_payment_percent')
                     ? (a['min_payment_percent'] as num?)?.toDouble()
                     : acc.minPaymentPercent,
+                interestMonthlyPercent:
+                    a.containsKey('interest_monthly_percent')
+                        ? (a['interest_monthly_percent'] as num?)?.toDouble()
+                        : acc.interestMonthlyPercent,
                 creditReminderEnabled:
                     a['reminder_enabled'] as bool? ?? acc.creditReminderEnabled,
                 creditReminderTime:

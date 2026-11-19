@@ -490,6 +490,7 @@ class _AccountEditorState extends State<_AccountEditor> {
   final _holderCtrl = TextEditingController();
   final _last4Ctrl = TextEditingController();
   final _expiryCtrl = TextEditingController();
+  final _interestCtrl = TextEditingController();
 
   late String _type;
   late String _currency;
@@ -539,6 +540,9 @@ class _AccountEditorState extends State<_AccountEditor> {
       _holderCtrl.text = existing.cardHolderName ?? '';
       _last4Ctrl.text = existing.cardNumberLast4 ?? '';
       _expiryCtrl.text = existing.cardExpiry ?? '';
+      _interestCtrl.text = existing.interestMonthlyPercent == null
+          ? ''
+          : _percentText(existing.interestMonthlyPercent!);
     }
   }
 
@@ -552,8 +556,16 @@ class _AccountEditorState extends State<_AccountEditor> {
     _holderCtrl.dispose();
     _last4Ctrl.dispose();
     _expiryCtrl.dispose();
+    _interestCtrl.dispose();
     super.dispose();
   }
+
+  static String _percentText(double v) =>
+      (v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString())
+          .replaceAll('.', ',');
+
+  double? get _interest =>
+      double.tryParse(_interestCtrl.text.trim().replaceAll(',', '.'));
 
   Future<void> _save() async {
     setState(() => _submitted = true);
@@ -580,6 +592,11 @@ class _AccountEditorState extends State<_AccountEditor> {
         _dueCtrl.text.trim().isNotEmpty &&
         (due == null || due < 1 || due > 31))
       error = 'Informe o vencimento entre 1 e 31.';
+    final interest = _interest;
+    if (isCredit &&
+        _interestCtrl.text.trim().isNotEmpty &&
+        (interest == null || interest < 0 || interest > 100))
+      error = 'Informe os juros do rotativo entre 0 e 100% ao mês.';
     if (error != null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
@@ -615,6 +632,7 @@ class _AccountEditorState extends State<_AccountEditor> {
           creditLimit: isCredit ? limit : null,
           statementDay: isCredit ? statement : null,
           dueDay: isCredit ? due : null,
+          interestMonthlyPercent: isCredit ? interest : null,
           linkedAccountId: isCard ? _linkedAccountId : null,
           cardHolderName: isCard ? _holderCtrl.text.trim() : null,
           cardNumberLast4: isCard ? _last4Ctrl.text.trim() : null,
@@ -633,6 +651,8 @@ class _AccountEditorState extends State<_AccountEditor> {
           creditLimit: isCredit ? limit : null,
           statementDay: isCredit ? statement : null,
           dueDay: isCredit ? due : null,
+          interestMonthlyPercent: isCredit ? interest : null,
+          clearInterest: interest == null,
           linkedAccountId: isCard ? _linkedAccountId : null,
           cardHolderName: isCard ? _holderCtrl.text.trim() : null,
           cardNumberLast4: isCard ? _last4Ctrl.text.trim() : null,
@@ -829,6 +849,20 @@ class _AccountEditorState extends State<_AccountEditor> {
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _interestCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Juros do rotativo (% ao mês)',
+                        hintText: 'Está na fatura. Ex.: 14,5',
+                        helperText:
+                            'Usado só para estimar na tela Simular. Pela Lei 14.690/2023, juros e encargos do rotativo não passam do valor original da dívida.',
+                        helperMaxLines: 3,
+                        suffixText: '%',
+                      ),
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<String?>(

@@ -20,6 +20,7 @@ import '../screens/month_review_screen.dart';
 import '../screens/notification_inbox_screen.dart';
 import '../screens/reminder_settings_screen.dart';
 import '../screens/security_settings_screen.dart';
+import '../screens/simulate_screen.dart';
 import '../screens/sync_settings_screen.dart';
 import '../screens/transfer_screen.dart';
 import '../screens/wishlist_screen.dart';
@@ -207,6 +208,13 @@ List<CommandEntry> paletteEntries(AppProvider app, String query) {
     (5, 'Mais', 'Tudo o resto', Icons.more_horiz, ''),
   ];
   final screens = [
+    CommandEntry(
+        title: 'Simular',
+        subtitle: 'E se eu comprar, vender ou pagar só parte da fatura?',
+        icon: Icons.calculate_outlined,
+        keywords:
+            'simulação simulacao cenário cenario e se previsão caixa rotativo',
+        run: (h) => h.push(const SimulateScreen())),
     CommandEntry(
         title: 'Mês em revisão',
         icon: Icons.auto_stories_outlined,

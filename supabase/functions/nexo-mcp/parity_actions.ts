@@ -10,7 +10,8 @@ import {
 import { balanceCents, callTool, ToolInputError, type ToolDefinition } from "./tools.ts";
 import { envelopeById, envelopes, spendingTypes } from "./envelopes.ts";
 import { checkSetting, settingDefs, sharedSettings } from "./settings.ts";
-import { cardInvoices, cycleFor, occurrences } from "./invoices.ts";
+import { cardInvoices, occurrences } from "./invoices.ts";
+import { dailyAverage, projection, type SimEvent, simulate, walk } from "./cash.ts";
 import { reconcileAccount } from "./inbox.ts";
 import { FX_SCALE, lastRate, ratio } from "./portfolio.ts";
 import { toMovement } from "./inbox.ts";
@@ -63,7 +64,7 @@ const filterProps = {
 };
 
 export const readOnlyParity = new Set(["describe_app_capabilities", "get_spending_types", "get_settings",
-  "list_requests", "get_import_rules", "get_monthly_trend", "get_net_worth", "get_cash_projection",
+  "list_requests", "get_import_rules", "get_monthly_trend", "get_net_worth", "get_cash_projection", "simulate_cash",
   "get_spending_breakdown", "get_bank_accounts", "reconcile_account"]);
 
 export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
@@ -312,6 +313,22 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
       daily_spending: { description: '"average" ou um valor por dia em reais (gasto à vista).', anyOf: [{ type: "string", enum: ["average"] }, { type: "number", minimum: 0 }] } }, ["until"]),
   },
   {
+    name: "simulate_cash", title: "Simular o caixa (e se…)",
+    description: "Só leitura, nada é gravado: a projeção de caixa até a data com eventos hipotéticos (entrada, saída, venda de bem, venda de investimento que cai na liquidação, pagamento parcial de fatura com o resto e juros estimados na fatura seguinte). Devolve o ponto mais baixo, quanto falta e a diferença no fim. Mesma regra da tela Simular do app.",
+    inputSchema: obj({
+      until: dateField,
+      daily_spending: { description: '"average" ou um valor por dia em reais (gasto à vista).', anyOf: [{ type: "string", enum: ["average"] }, { type: "number", minimum: 0 }] },
+      events: { type: "array", minItems: 1, maxItems: 20, items: obj({
+        kind: { type: "string", enum: ["income", "expense", "sell_asset", "sell_investment", "partial_invoice"] },
+        date: { ...dateField, description: "Dia do evento; na venda de investimento, o dia da ordem. Sem data: hoje." },
+        amount: { type: "number", exclusiveMinimum: 0, maximum: 1000000000, description: "Em reais. No pagamento parcial, quanto você paga da fatura (o mínimo está em get_card_invoices/get_bank_accounts)." },
+        label: { type: "string", maxLength: 80 },
+        investment_id: { type: "string", description: "sell_investment: o investimento (get_investments)" },
+        card_id: { type: "string", description: "partial_invoice: o cartão; vale a primeira fatura dele que vence até a data" },
+      }, ["kind", "amount"]) },
+    }, ["until", "events"]),
+  },
+  {
     name: "get_spending_breakdown", title: "Consumo agrupado",
     description: "Consumo de um período agrupado por categoria, conta, subcategoria, dia da semana, tipo de gasto ou estabelecimento (descrição). Mesma regra de consumo do app.",
     inputSchema: obj({ from: dateField, to: dateField,
@@ -348,34 +365,6 @@ function bool(v: unknown, key: string): boolean | undefined {
   return v;
 }
 const find = (rows: Row[] | undefined, id: unknown) => (rows ?? []).find((r) => text(r.id) === id);
-
-/// Day-to-day spending per day, in cents: the last 28 days before today,
-/// apart for the accounts and each card. Real spending only (no neutral,
-/// recurring, installments, one-off or pending). Same rule as the app's
-/// DailySpending.average (lib/services/daily_spending.dart).
-function dailyAverage(l: Ledger, today: string) {
-  const from = addDays(today, -28);
-  const metas = metadataIndex(l);
-  let cash = 0;
-  const cards = new Map<string, number>();
-  for (const t of l.transactions) {
-    if (t.type !== "expense") continue;
-    const d = day(text(t.date));
-    if (d < from || d >= today) continue;
-    const a = find(l.accounts, t.account_id);
-    if (!a || a.exclude_from_total === 1 || a.type === "gold" || currencyOf(l, t) !== l.mainCurrency) continue;
-    const m = meta(metas.get(text(t.id)));
-    if (m.status === "pending" || m.expenseClass === "extraordinary" || m.source === "recurring" ||
-      m.source === "installment" || m.installmentTotal != null) continue;
-    if (text(t.id).startsWith("recurring:") || isNeutral(t, m)) continue;
-    if (a.type === "credit") cards.set(text(a.id), (cards.get(text(a.id)) ?? 0) + cents(num(t.amount)));
-    else cash += cents(num(t.amount));
-  }
-  return {
-    cash: Math.round(cash / 28),
-    cards: new Map([...cards].map(([id, v]) => [id, Math.round(v / 28)] as [string, number]).filter(([, v]) => v > 0)),
-  };
-}
 
 function account(l: Ledger, id: unknown, noCredit = false) {
   const a = find(l.accounts, id);
@@ -592,7 +581,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           bens_e_desejos: { read: ["get_assets", "get_wishlist"], write: ["add_asset", "update_asset", "delete_asset", "add_wishlist_item", "update_wishlist_item", "delete_wishlist_item"] },
           open_finance: { read: ["list_suggestions", "get_bank_sync_status", "get_import_rules", "get_bank_accounts", "reconcile_account"], write: ["confirm_suggestion", "confirm_suggestion_as_transfer", "link_suggestion", "ignore_suggestions", "save_import_rule", "delete_import_rule", "refresh_bank_data", "link_bank_account"] },
           configurações: { read: ["get_settings"], write: ["set_setting", "set_spending_targets"] },
-          análises: { read: ["get_financial_summary", "get_spending_by_category", "get_spending_breakdown", "get_monthly_trend", "get_net_worth", "get_cash_projection"] },
+          análises: { read: ["get_financial_summary", "get_spending_by_category", "get_spending_breakdown", "get_monthly_trend", "get_net_worth", "get_cash_projection", "simulate_cash"] },
           pedidos: { read: ["get_request_status", "list_requests", "describe_app_capabilities"], write: ["undo_request"] },
         },
         spending_types: envelopes.map((e) => ({ id: e.id, name: e.name, default_percent: e.defaultShare, what: e.hint })),
@@ -1257,95 +1246,12 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       }
       const daily = asked === undefined ? null
         : asked === "average" ? dailyAverage(l, today) : { cash: cents(asked), cards: new Map<string, number>() };
-      const credit = new Set(l.accounts.filter((a) => a.type === "credit").map((a) => text(a.id)));
-      const main = l.accounts.filter((a) => a.type !== "credit" && a.type !== "gold" && a.exclude_from_total !== 1 &&
-        text(a.currency) === l.mainCurrency);
-      const start = main.reduce((s, a) => s + balanceCents(l, text(a.id)), 0);
-      const items: { date: string; what: string; amount: number; estimate?: number }[] = [];
-      for (const r of l.recurring) {
-        if (credit.has(text(r.account_id))) continue; // card bills arrive through the invoice
-        if (!main.some((a) => a.id === r.account_id)) continue;
-        for (const d of occurrences(r, until)) {
-          items.push({ date: d < today ? today : d, what: `${text(r.name)} (recorrente${d < today ? `, atrasada desde ${d}` : ""})`,
-            amount: (r.payment_type === "income" ? 1 : -1) * recurringCents(r) });
-        }
-      }
-      const metas = metadataIndex(l);
-      for (const t of l.transactions) {
-        const m = meta(metas.get(text(t.id)));
-        if (m.status !== "pending" || credit.has(text(t.account_id)) || !main.some((a) => a.id === t.account_id)) continue;
-        if (text(t.id).startsWith("recurring:")) continue;
-        const due = day(m.dueDate ?? text(t.date));
-        if (due > until) continue;
-        items.push({ date: due < today ? today : due, what: `${text(t.description)} (pendente${due < today ? `, venceu em ${due}` : ""})`,
-          amount: (t.type === "income" ? 1 : -1) * cents(num(t.amount)) });
-      }
-      // Every invoice up to the day asked: what is entered (installments
-      // included) plus the recurring charges of the card, in their cycle.
-      const leftOut: string[] = [];
-      for (const card of cardInvoices(l, today, undefined, false, { future: 14, planUntil: until }).cards) {
-        const account = find(l.accounts, card.card_id);
-        if (account?.exclude_from_total === 1) continue;
-        // Paid from an account kept out of the available balance: like the
-        // app, it does not leave the cash.
-        const payer = find(l.accounts, account?.linked_account_id);
-        if (payer && (payer.type === "credit" || payer.type === "gold" || payer.exclude_from_total === 1)) {
-          leftOut.push(`Fatura ${card.card}: paga por conta fora do saldo disponível.`);
-          continue;
-        }
-        // The card's day-to-day average, from tomorrow, in the invoice of
-        // each day's cycle.
-        const estimated = new Map<string, { due: string | null; cents: number }>();
-        const perDay = daily?.cards.get(card.card_id) ?? 0;
-        for (let d = addDays(today, 1); perDay > 0 && d <= until; d = addDays(d, 1)) {
-          const c = cycleFor(d, card.closing_day ?? null, card.due_day ?? null);
-          const e = estimated.get(c.end) ?? estimated.set(c.end, { due: c.due, cents: 0 }).get(c.end)!;
-          e.cents += perDay;
-        }
-        const invoiceItem = (due: string, entered: number, extra: number, recurring?: number) => {
-          const owed = Math.max(entered + extra, 0);
-          if (due > until || owed <= 0) return;
-          const late = due < today;
-          items.push({
-            date: late ? today : due,
-            what: `Fatura ${card.card} (${late ? "venceu em" : "vence"} ${due}${recurring ? `, com ${money(recurring)} de recorrentes previstas` : ""}${extra ? `, com ${money(Math.min(extra, owed))} de gasto do dia a dia estimado` : ""})`,
-            amount: -owed,
-            estimate: extra ? -Math.min(extra, owed) : undefined,
-          });
-        };
-        for (const inv of card.invoices) {
-          const extra = estimated.get(inv.closing_date)?.cents ?? 0;
-          estimated.delete(inv.closing_date);
-          if (!inv.due_date) continue;
-          const planned = inv.expected_recurring ? cents(inv.expected_recurring) : 0;
-          invoiceItem(inv.due_date, cents(inv.total) + planned - cents(inv.paid), extra, planned || undefined);
-        }
-        for (const e of estimated.values()) if (e.due) invoiceItem(e.due, 0, e.cents);
-      }
-      items.sort((a, b) => a.date.localeCompare(b.date));
-      // Day by day: the day-to-day spending of the account leaves from
-      // tomorrow; the safe amount per day uses the balance without it.
-      const cashPerDay = daily?.cash ?? 0;
-      let running = start, base = start, lowest = start, lowestDate = today, next = 0, n = 0, estimatedTotal = 0;
-      let safe: number | null = null;
-      const timeline: Record<string, unknown>[] = [];
-      for (let d = today; d <= until; d = addDays(d, 1)) {
-        if (d > today) { running -= cashPerDay; estimatedTotal += cashPerDay; n++; }
-        for (; next < items.length && items[next].date <= d; next++) {
-          const i = items[next];
-          running += i.amount;
-          base += i.amount - (i.estimate ?? 0);
-          estimatedTotal -= i.estimate ?? 0;
-          timeline.push({ date: i.date, what: i.what, amount: money(i.amount), balance_after: money(running),
-            estimated: i.estimate ? money(-i.estimate) : undefined });
-        }
-        if (running < lowest) { lowest = running; lowestDate = d; }
-        if (n > 0 && (safe === null || base / n < safe)) safe = base / n;
-      }
+      const { start, items, leftOut } = projection(l, today, until, daily);
+      const { timeline, end: running, lowest, lowestDate, safePerDay, estimatedTotal } = walk(start, items, today, until, daily?.cash ?? 0);
       return {
         from: today, until, starting_cash: money(start), ending_cash: money(running),
         lowest_point: { balance: money(lowest), date: lowestDate },
-        safe_per_day: money(safe === null || safe <= 0 ? 0 : Math.floor(safe + 1e-6)),
+        safe_per_day: money(safePerDay),
         daily_spending: daily ? {
           basis: asked === "average" ? "média diária das últimas 4 semanas, sem recorrentes, parcelas, gastos pontuais e neutros" : "valor informado",
           account_per_day: money(daily.cash),
@@ -1355,6 +1261,68 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
         timeline: timeline.slice(0, 120), truncated: timeline.length > 120 ? timeline.length : undefined,
         left_out: leftOut.length ? leftOut : undefined,
         note: `Estimativa: contas em reais que entram no total, sem cartões e ouro. Cada fatura que vence até a data entra no vencimento, com as parcelas já lançadas e as recorrentes do cartão no ciclo certo. ${daily ? "O gasto do dia a dia é estimado: sai da conta todo dia a partir de amanhã, e o do cartão entra na fatura do ciclo (não aparece item a item na lista)." : "Gastos variáveis do dia a dia não estão incluídos (peça daily_spending)."} safe_per_day é quanto dá para gastar por dia, a partir de amanhã, sem o saldo ficar negativo em nenhum dia até a data.`,
+      };
+    }
+    case "simulate_cash": {
+      only(args, ["until", "daily_spending", "events"]);
+      const until = dateArg(args.until, "until");
+      if (until <= today) throw new ToolInputError("until deve ser depois de hoje.");
+      if (until > addDays(today, 400)) throw new ToolInputError("Simule no máximo 400 dias.");
+      const asked = args.daily_spending;
+      if (asked !== undefined && asked !== "average" &&
+        (typeof asked !== "number" || !Number.isFinite(asked) || asked < 0 || asked > 1_000_000)) {
+        throw new ToolInputError('daily_spending deve ser "average" ou um valor por dia em reais.');
+      }
+      const daily = asked === undefined ? null
+        : asked === "average" ? dailyAverage(l, today) : { cash: cents(asked), cards: new Map<string, number>() };
+      if (!Array.isArray(args.events) || args.events.length === 0 || args.events.length > 20) {
+        throw new ToolInputError("events deve ter de 1 a 20 eventos.");
+      }
+      const kinds = ["income", "expense", "sell_asset", "sell_investment", "partial_invoice"];
+      const events: SimEvent[] = args.events.map((raw, i) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ToolInputError(`events[${i}] deve ser um objeto.`);
+        const e = raw as Args;
+        only(e, ["kind", "date", "amount", "label", "investment_id", "card_id"]);
+        if (!kinds.includes(e.kind as string)) throw new ToolInputError(`events[${i}].kind deve ser ${kinds.join(", ")}.`);
+        if (typeof e.amount !== "number" || !Number.isFinite(e.amount) || e.amount <= 0 || e.amount > 1_000_000_000) {
+          throw new ToolInputError(`events[${i}].amount deve ser um valor positivo em reais.`);
+        }
+        if (e.label !== undefined && (typeof e.label !== "string" || e.label.length > 80)) throw new ToolInputError(`events[${i}].label: texto até 80 letras.`);
+        const out: SimEvent = { kind: e.kind as SimEvent["kind"], amount: cents(e.amount),
+          date: e.date === undefined ? undefined : dateArg(e.date, `events[${i}].date`), label: e.label as string | undefined };
+        if (out.kind === "sell_investment") {
+          const inv = find(l.investments, e.investment_id);
+          if (!inv) throw new ToolInputError(`events[${i}].investment_id: investimento não encontrado (get_investments).`);
+          out.assetClass = text(inv.asset_class);
+          out.label = out.label || `Venda de ${text(inv.name)}`;
+        } else if (e.investment_id !== undefined) throw new ToolInputError(`events[${i}].investment_id só vale em sell_investment.`);
+        if (out.kind === "partial_invoice") {
+          const card = find(l.accounts, e.card_id);
+          if (!card || card.type !== "credit") throw new ToolInputError(`events[${i}].card_id: cartão de crédito não encontrado.`);
+          out.cardId = text(card.id);
+        } else if (e.card_id !== undefined) throw new ToolInputError(`events[${i}].card_id só vale em partial_invoice.`);
+        return out;
+      });
+      const cards = new Map(l.accounts.filter((a) => a.type === "credit").map((a) => [text(a.id), {
+        name: text(a.name), closing: typeof a.statement_day === "number" ? a.statement_day : null,
+        due: typeof a.due_day === "number" ? a.due_day : null,
+        interest: typeof a.interest_monthly_percent === "number" ? a.interest_monthly_percent : null,
+      }]));
+      const base = projection(l, today, until, daily);
+      const before = walk(base.start, base.items, today, until, daily?.cash ?? 0);
+      const sim = simulate(base.items, events, today, until, cards);
+      const after = walk(base.start, sim.items, today, until, daily?.cash ?? 0);
+      return {
+        from: today, until, starting_cash: money(base.start),
+        without_events: { ending_cash: money(before.end), lowest_point: { balance: money(before.lowest), date: before.lowestDate } },
+        with_events: { ending_cash: money(after.end), lowest_point: { balance: money(after.lowest), date: after.lowestDate },
+          missing: money(Math.max(0, -after.lowest)) },
+        difference_at_end: money(after.end - before.end),
+        events_applied: sim.added.map((i) => ({ date: i.date, what: i.what, amount: money(i.amount),
+          estimated: i.estimate ? money(-i.estimate) : undefined })),
+        warnings: sim.warnings.length ? sim.warnings : undefined,
+        timeline: after.timeline.slice(0, 120), truncated: after.timeline.length > 120 ? after.timeline.length : undefined,
+        note: "Simulação: nada foi gravado. missing é quanto faltaria no dia mais baixo. A venda de investimento cai no dia da liquidação (ações, FIIs e ETFs em D+2 úteis; renda fixa no mesmo dia útil). No pagamento parcial, o resto vai para a fatura seguinte com um mês de juros do rotativo pela taxa do cartão: estimativa, sem IOF e encargos; pela Lei 14.690/2023, juros e encargos do rotativo não passam do valor original da dívida.",
       };
     }
     case "get_spending_breakdown": {

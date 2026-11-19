@@ -906,9 +906,10 @@ const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.
     mainCurrency: 'BRL',
     accounts: c.accounts.map((a) => ({ id: a.id, name: a.id, type: a.type, currency: 'BRL',
       statement_day: a.statementDay ?? null, due_day: a.dueDay ?? null, linked_account_id: a.linkedAccountId ?? null,
-      exclude_from_total: a.excludeFromTotal ? 1 : 0 })),
+      exclude_from_total: a.excludeFromTotal ? 1 : 0, interest_monthly_percent: a.interestMonthlyPercent ?? null })),
     balances: Object.fromEntries(c.accounts.map((a) => [a.id, Math.round(a.balance * 1e6)])),
-    categories: [], investments: [], investmentOperations: [],
+    categories: [], investmentOperations: [],
+    investments: (c.investments ?? []).map((i) => ({ id: i.id, name: i.name, asset_class: i.assetClass, archived: 0 })),
     transactions: (c.transactions ?? []).map((t) => ({ id: t.id, type: t.type, amount: t.amount, description: t.id,
       account_id: t.accountId, category_id: '', date: `${t.date}T12:00:00.000`, note: '' })),
     metadata: (c.transactions ?? []).filter((t) => t.status || t.expenseClass || t.excludeFromSpending || t.source)
@@ -930,9 +931,43 @@ const pact = (q, name, args, l = scenario) => callAction(name, args, l, tday, q.
       assert.deepEqual(got, want);
       assert.equal(Math.round(out.starting_cash * 100), c.expect.start);
       assert.equal(Math.round(out.ending_cash * 100), c.expect.end);
+      if (!c.simulate) return;
+      const events = c.simulate.map((e) => ({ kind: e.kind, amount: e.amount, date: e.date, label: e.label,
+        investment_id: e.investmentId, card_id: e.cardId }));
+      const sim = await callAction('simulate_cash', { until: c.until, events }, ledger(c), c.today, smartQueue().deps);
+      const want_ = c.expect.simulation;
+      assert.equal(Math.round(sim.with_events.ending_cash * 100), want_.end);
+      assert.deepEqual([sim.with_events.lowest_point.date, Math.round(sim.with_events.lowest_point.balance * 100)], want_.lowest);
+      assert.equal(Math.round(sim.with_events.missing * 100), want_.missing);
+      assert.equal(Math.round(sim.without_events.ending_cash * 100), c.expect.end);
+      assert.deepEqual(sim.events_applied.map((i) => [i.date, Math.round(i.amount * 100)]).sort((a, b) => a[0].localeCompare(b[0])),
+        want_.added);
     });
   }
 }
+
+await test('simulate_cash: nothing asked of the app, events checked; the card interest goes through update_account', async () => {
+  const q = smartQueue();
+  const bad = [
+    { until: '2026-12-31', events: [] },
+    { until: '2026-12-31', events: [{ kind: 'sell_investment', amount: 10, investment_id: 'nada' }] },
+    { until: '2026-12-31', events: [{ kind: 'partial_invoice', amount: 10, card_id: 'main' }] },
+    { until: '2026-12-31', events: [{ kind: 'expense', amount: -5 }] },
+    { until: '2026-12-31', events: [{ kind: 'income', amount: 5, card_id: 'nu' }] },
+  ];
+  for (const args of bad) await assert.rejects(pact(q, 'simulate_cash', args), ToolInputError);
+  const out = await pact(q, 'simulate_cash', { until: '2026-12-31', events: [{ kind: 'expense', amount: 10, label: 'Exemplo' }] });
+  assert.equal(q.items.length, 0, 'a simulation records nothing');
+  assert.equal(out.difference_at_end, -10);
+  assert.equal(out.events_applied[0].what, 'Exemplo');
+  await pact(q, 'update_account', { id: 'nu', interest_monthly_percent: 9.5 });
+  assert.equal(q.items.at(-1).args.interest_monthly_percent, 9.5);
+  const { minBuildFor } = await import('../supabase/functions/nexo-mcp/queue.ts');
+  assert.equal(minBuildFor('account.edit', q.items.at(-1).args), 61, 'an older app would drop it');
+  assert.equal(minBuildFor('account.edit', { id: 'nu', name: 'Cartão' }), null);
+  await assert.rejects(pact(q, 'update_account', { id: 'main', interest_monthly_percent: 2 }), ToolInputError);
+  await assert.rejects(pact(q, 'update_account', { id: 'nu', interest_monthly_percent: 120 }), ToolInputError);
+});
 
 await test('rules: transfer, internal and "register by itself", asked through the connector', async () => {
   const q = smartQueue();

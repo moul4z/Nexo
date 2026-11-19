@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nexo/models/models.dart';
 import 'package:nexo/models/transaction_metadata.dart';
 import 'package:nexo/services/cash_forecast.dart';
+import 'package:nexo/services/cash_simulation.dart';
 import 'package:nexo/services/daily_spending.dart';
 
 void main() {
@@ -33,7 +34,9 @@ void main() {
               statementDay: a['statementDay'] as int?,
               dueDay: a['dueDay'] as int?,
               linkedAccountId: a['linkedAccountId'] as String?,
-              excludeFromTotal: a['excludeFromTotal'] == true)
+              excludeFromTotal: a['excludeFromTotal'] == true,
+              interestMonthlyPercent:
+                  (a['interestMonthlyPercent'] as num?)?.toDouble())
       ];
       final txs = (c['transactions'] as List?) ?? const [];
       final transactions = [
@@ -124,6 +127,37 @@ void main() {
       if (expect_['safePerDay'] != null)
         expect(cents(CashForecast.safePerDay(forecast(null), now, until, same)),
             expect_['safePerDay']);
+      final simulate = c['simulate'] as List?;
+      if (simulate == null) return;
+      final classes = {
+        for (final i in (c['investments'] as List?) ?? const [])
+          i['id'] as String: i['assetClass'] as String
+      };
+      final sim = CashSimulation.run(
+          base: out,
+          events: [
+            for (final e in simulate)
+              SimEvent(e['kind'] as String, (e['amount'] as num).toDouble(),
+                  date: e['date'] == null ? null : date(e['date'] as String),
+                  label: (e['label'] as String?) ?? '',
+                  assetClass: classes[e['investmentId']],
+                  cardId: e['cardId'] as String?)
+          ],
+          now: now,
+          until: until,
+          accounts: accounts,
+          convert: same);
+      final wantSim = expect_['simulation'] as Map<String, dynamic>;
+      expect(cents(sim.after.end), wantSim['end']);
+      expect([iso(sim.after.lowestDate), cents(sim.after.lowest)],
+          wantSim['lowest']);
+      expect(cents(sim.missing), wantSim['missing']);
+      expect(cents(sim.before.end), expect_['end']);
+      expect(
+          [
+            for (final i in sim.added) [iso(i.date), cents(i.amount)]
+          ]..sort(_byDayThenAmount),
+          wantSim['added']);
     });
   }
 }
