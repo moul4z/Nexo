@@ -76,3 +76,6 @@ supabase/.temp/
 
 # Firebase values for the silent push (optional, per installation)
 android/firebase.local.properties
+
+# Dependências do laboratório de SQL (tool/sql-lab/package.json)
+tool/sql-lab/node_modules/

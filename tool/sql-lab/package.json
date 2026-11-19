@@ -1,0 +1,8 @@
+{
+  "name": "nexo-sql-lab",
+  "private": true,
+  "description": "Postgres em memória (PGlite) para tool/validate_sync_sql.mjs. Instale com: npm ci --prefix tool/sql-lab --ignore-scripts",
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.10"
+  }
+}

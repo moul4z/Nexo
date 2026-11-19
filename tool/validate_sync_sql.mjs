@@ -1,9 +1,15 @@
 // Local PostgreSQL/WASM tests. No network, no credentials, no production DB.
-// npm install --prefix build/sync-sql-runtime --ignore-scripts --save-exact @electric-sql/pglite@0.5.10
+// Dependency pinned in tool/sql-lab/package.json: npm ci --prefix tool/sql-lab --ignore-scripts
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { PGlite } from '../build/sync-sql-runtime/node_modules/@electric-sql/pglite/dist/index.js';
+let PGlite;
+try {
+  ({ PGlite } = await import('./sql-lab/node_modules/@electric-sql/pglite/dist/index.js'));
+} catch {
+  console.error('PGlite não instalado. Rode: npm ci --prefix tool/sql-lab --ignore-scripts');
+  process.exit(2);
+}
 
 const db = new PGlite();
 const A = '11111111-1111-4111-8111-111111111111';

@@ -1,0 +1,55 @@
+# Checks of every round: analysis, the Flutter suite and the four Node sets
+# (connector, Pluggy, SQL lab, quotes). Synthetic data only; no secret is
+# needed or read.
+#
+# Runs only when started by hand (Actions › CI › Run workflow). To run on
+# every push and pull request, add under "on":
+#   push:
+#     branches: [main, codex/nexo-investments]
+#   pull_request:
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Conector, Pluggy, SQL e cotações
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tool/sql-lab/package-lock.json
+      - run: npm ci --prefix tool/sql-lab --ignore-scripts
+      - run: node tool/test_nexo_mcp.mjs
+      - run: node tool/test_pluggy.mjs
+      - run: node tool/test_market_quotes.mjs
+      - run: node tool/validate_sync_sql.mjs
+
+  flutter:
+    name: Análise e testes do app
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.5
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      # Low concurrency: some tests share SQLite files and time out under load.
+      - run: flutter test --concurrency=2
