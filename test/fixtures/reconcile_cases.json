@@ -405,6 +405,130 @@
         {"id": "e-bet", "type": "expense", "cents": 2000, "description": "Aposta", "accountId": "main", "day": "2026-11-15", "categoryId": "bets"}
       ],
       "expect": {"m": {"resolution": "maybe", "automatic": false, "transactionId": "e-bet"}}
+    },
+    {
+      "name": "R1 assinatura do cartão no dia previsto: é a recorrente, a pessoa confirma",
+      "movements": [
+        {"id": "m", "cents": 5590, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-15T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "recurring": [
+        {"id": "netflix", "name": "Netflix", "accountId": "card", "type": "expense", "cents": 5590, "day": "2026-11-15"}
+      ],
+      "expect": {
+        "m": {"resolution": "recurring", "automatic": false, "recurringId": "netflix"}
+      }
+    },
+    {
+      "name": "R2 assinatura mais cara (até 7,5%) e dois dias depois: ainda é a recorrente",
+      "movements": [
+        {"id": "m", "cents": 5990, "direction": "out", "medium": "credit", "description": "Netflix.com", "at": "2026-11-17T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "recurring": [
+        {"id": "netflix", "name": "Netflix", "accountId": "card", "type": "expense", "cents": 5590, "day": "2026-11-15"}
+      ],
+      "expect": {
+        "m": {"resolution": "recurring", "automatic": false, "recurringId": "netflix"}
+      }
+    },
+    {
+      "name": "R3 valor muito diferente ou dez dias depois: não é a recorrente",
+      "movements": [
+        {"id": "caro", "cents": 8000, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-15T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "tarde", "cents": 5590, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-25T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "recurring": [
+        {"id": "netflix", "name": "Netflix", "accountId": "card", "type": "expense", "cents": 5590, "day": "2026-11-15"}
+      ],
+      "expect": {
+        "caro": {"resolution": "newEntry", "automatic": false},
+        "tarde": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "R4 já lançado à mão com o mesmo valor: liga ao lançamento, não à recorrente",
+      "movements": [
+        {"id": "m", "cents": 5590, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-15T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "entries": [
+        {"id": "e-netflix", "type": "expense", "cents": 5590, "description": "Netflix", "accountId": "card", "day": "2026-11-15", "categoryId": "subs"}
+      ],
+      "recurring": [
+        {"id": "netflix", "name": "Netflix", "accountId": "card", "type": "expense", "cents": 5590, "day": "2026-11-15"}
+      ],
+      "expect": {
+        "m": {"resolution": "linked", "automatic": true, "transactionId": "e-netflix"}
+      }
+    },
+    {
+      "name": "R5 lançado à mão com outro valor: pergunta se é o mesmo, não oferece a recorrente",
+      "movements": [
+        {"id": "m", "cents": 5990, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-15T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "entries": [
+        {"id": "e-netflix", "type": "expense", "cents": 5590, "description": "Netflix", "accountId": "card", "day": "2026-11-14", "categoryId": "subs"}
+      ],
+      "recurring": [
+        {"id": "netflix", "name": "Netflix", "accountId": "card", "type": "expense", "cents": 5590, "day": "2026-11-15"}
+      ],
+      "expect": {
+        "m": {"resolution": "maybe", "automatic": false, "transactionId": "e-netflix"}
+      }
+    },
+    {
+      "name": "R6 duas assinaturas de mesmo valor no mesmo dia: o nome decide",
+      "movements": [
+        {"id": "a", "cents": 2190, "direction": "out", "medium": "credit", "description": "Spotify", "at": "2026-11-10T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "b", "cents": 2190, "direction": "out", "medium": "credit", "description": "Deezer", "at": "2026-11-10T09:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "recurring": [
+        {"id": "deezer", "name": "Deezer", "accountId": "card", "type": "expense", "cents": 2190, "day": "2026-11-10"},
+        {"id": "spotify", "name": "Spotify", "accountId": "card", "type": "expense", "cents": 2190, "day": "2026-11-10"}
+      ],
+      "expect": {
+        "a": {"resolution": "recurring", "automatic": false, "recurringId": "spotify"},
+        "b": {"resolution": "recurring", "automatic": false, "recurringId": "deezer"}
+      }
+    },
+    {
+      "name": "R7 Pix para a academia pelo nome de quem recebe; outra conta do Nexo não serve",
+      "movements": [
+        {"id": "pix", "cents": 11900, "direction": "out", "description": "Pix enviado", "counterparty": "Academia Corpo Exemplo", "at": "2026-11-05T07:00:00", "accountId": "inter", "nexoAccountId": "main"},
+        {"id": "outra", "cents": 11900, "direction": "out", "description": "Pix enviado", "counterparty": "Academia Corpo Exemplo", "at": "2026-11-05T07:30:00", "accountId": "mp", "nexoAccountId": "reserve"}
+      ],
+      "recurring": [
+        {"id": "gym", "name": "Academia", "accountId": "main", "type": "expense", "cents": 11900, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "pix": {"resolution": "recurring", "automatic": false, "recurringId": "gym"},
+        "outra": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "R8 salário que entra no dia: é a recorrente de receita; o mesmo valor saindo não é",
+      "movements": [
+        {"id": "sal", "cents": 620000, "direction": "in", "description": "Salario EMPRESA EXEMPLO", "at": "2026-11-05T06:00:00", "accountId": "inter", "nexoAccountId": "main"}
+      ],
+      "recurring": [
+        {"id": "salary", "name": "Salário", "accountId": "main", "type": "income", "cents": 620000, "day": "2026-11-05"},
+        {"id": "rent", "name": "Salário da diarista", "accountId": "main", "type": "expense", "cents": 620000, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "sal": {"resolution": "recurring", "automatic": false, "recurringId": "salary"}
+      }
+    },
+    {
+      "name": "R9 uma ocorrência só: a segunda cobrança igual no mesmo período é nova",
+      "movements": [
+        {"id": "m1", "cents": 5590, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-15T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"},
+        {"id": "m2", "cents": 5590, "direction": "out", "medium": "credit", "description": "NETFLIX.COM", "at": "2026-11-16T08:00:00", "accountId": "nu-card", "nexoAccountId": "card"}
+      ],
+      "recurring": [
+        {"id": "netflix", "name": "Netflix", "accountId": "card", "type": "expense", "cents": 5590, "day": "2026-11-15"}
+      ],
+      "expect": {
+        "m1": {"resolution": "recurring", "automatic": false, "recurringId": "netflix"},
+        "m2": {"resolution": "newEntry", "automatic": false}
+      }
     }
   ]
 }

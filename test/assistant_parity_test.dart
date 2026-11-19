@@ -695,6 +695,66 @@ void main() {
     expect(await ImportRulesService.load(), isEmpty);
   });
 
+  test('a recurring bill from the bank, and an occurrence already entered',
+      () async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    for (final id in ['stream', 'gym']) {
+      await app.addRecurring(RecurringPayment(
+          id: id,
+          name: id == 'stream' ? 'Streaming Exemplo' : 'Academia Exemplo',
+          accountId: id == 'stream' ? 'nu' : 'bank',
+          categoryId: 'food_exp',
+          amount: id == 'stream' ? 39.90 : 119,
+          freqVal: 1,
+          freqUnit: 'months',
+          startDate: today,
+          nextDate: today));
+    }
+    await (await DBHelper.database).insert('notification_suggestions', {
+      'id': 'pluggy:m',
+      'app_id': 'pluggy',
+      'amount_cents': 3990,
+      'description': 'STREAMING EXEMPLO',
+      'kind': 'expense',
+      'medium': 'credit',
+      'occurred_at': today.add(const Duration(hours: 9)).millisecondsSinceEpoch,
+      'status': 'pending',
+      'direction': 'out',
+      'nexo_account_id': 'nu',
+    });
+    final due = today.toIso8601String().substring(0, 10);
+    // Another occurrence than the one the assistant saw: refused.
+    final (stale, why) = await send('suggestion.recurring', {
+      'id': 'pluggy:m',
+      'recurring_id': 'stream',
+      'expected_date': '2020-01-01'
+    });
+    expect(stale, 'rejected');
+    expect('$why', contains('mudou'));
+    final (s1, r1) = await send('suggestion.recurring',
+        {'id': 'pluggy:m', 'recurring_id': 'stream', 'expected_date': due});
+    expect(s1, 'done');
+    expect(r1['transaction_id'], startsWith('recurring:stream:'));
+    expect(app.transactions, hasLength(1));
+    expect(app.recurring.singleWhere((r) => r.id == 'stream').nextDate,
+        isNot(today));
+    // Repeated: the suggestion is already confirmed, nothing new.
+    final (s2, r2) = await send('suggestion.recurring',
+        {'id': 'pluggy:m', 'recurring_id': 'stream', 'expected_date': due});
+    expect(s2, 'done');
+    expect(r2['message'], contains('Já estava'));
+    expect(app.transactions, hasLength(1));
+
+    await app.addTransaction(expense('gym-typed', 119, date: today));
+    final (s3, _) = await send('recurring.link',
+        {'id': 'gym', 'transaction_id': 'gym-typed', 'expected_date': due});
+    expect(s3, 'done');
+    expect(app.transactions, hasLength(2), reason: 'nothing entered again');
+    expect(
+        app.recurring.singleWhere((r) => r.id == 'gym').nextDate, isNot(today));
+  });
+
   test('rules: transfer, internal and "register by itself"', () async {
     final (s1, r1) = await send('rule.save', {
       'pattern': 'Casa de Apostas Exemplo',

@@ -260,7 +260,8 @@ const baseActions: (ToolDefinition & { destructive?: boolean })[] = [
     name: "confirm_suggestion",
     title: "Confirmar sugestão",
     description:
-      "Transforma uma sugestão do Open Finance em lançamento, com a conta e a categoria escolhidas. Antes, procure em list_transactions se já não existe o mesmo lançamento.",
+      "Transforma uma sugestão do Open Finance em lançamento, com a conta e a categoria escolhidas (obrigatórias, salvo com recurring_id). " +
+      "Antes, procure em list_transactions se já não existe o mesmo lançamento. Se for a cobrança de uma recorrente, use recurring_id.",
     inputSchema: {
       type: "object",
       properties: {
@@ -272,8 +273,13 @@ const baseActions: (ToolDefinition & { destructive?: boolean })[] = [
         subcategory: { type: "string", maxLength: 60 },
         note: { type: "string", maxLength: 200 },
         allow_duplicate: { type: "boolean", description: "true: confirma mesmo havendo lançamento parecido (gastos diferentes de mesmo valor)" },
+        recurring_id: {
+          type: "string",
+          description: "Quando list_suggestions diz que é uma recorrente (resolution recurring): paga a ocorrência em aberto " +
+            "com o valor e o dia do banco. A conta e a categoria são as da recorrente; não informe account_id nem category_id.",
+        },
       },
-      required: ["id", "account_id", "category_id"],
+      required: ["id"],
       additionalProperties: false,
     },
   },
@@ -727,9 +733,35 @@ async function dispatchAction(name: string, args: Args, l: Ledger, today: string
       };
     }
     case "confirm_suggestion": {
-      only(args, ["id", "account_id", "category_id", "type", "description", "subcategory", "note", "allow_duplicate"]);
+      only(args, ["id", "account_id", "category_id", "type", "description", "subcategory", "note", "allow_duplicate", "recurring_id"]);
       const id = str(args, "id", 80)!;
       if (!/^pluggy:[0-9A-Za-z-]{1,64}$/.test(id)) throw new ToolInputError("id de sugestão inválido.");
+      if (args.recurring_id !== undefined) {
+        // The bill of a recurring: the app pays that occurrence with the
+        // bank's amount and day, with the recurring's account and category.
+        const extra = ["account_id", "category_id", "type", "description", "subcategory", "note", "allow_duplicate"]
+          .filter((k) => args[k] !== undefined);
+        if (extra.length) {
+          throw new ToolInputError(`Com recurring_id, a conta, a categoria e a descrição são as da recorrente: tire ${extra.join(", ")}.`);
+        }
+        const rid = str(args, "recurring_id", 256)!;
+        const r = l.recurring.find((x) => text(x.id) === rid);
+        if (!r) throw new ToolInputError("Recorrente não encontrada. Use get_recurring.");
+        const s = (await deps.suggestions(200)).find((x) => String(x.id) === id);
+        if (s) {
+          const out = s.direction === "out" || (s.direction !== "in" && s.kind !== "income" && s.kind !== "refund");
+          if ((text(r.payment_type) || "expense") !== (out ? "expense" : "income")) {
+            throw new ToolInputError(`${text(r.name)} é ${text(r.payment_type) === "income" ? "receita" : "despesa"} e o movimento ${out ? "sai" : "entra"}.`);
+          }
+        }
+        const q = await deps.enqueue("suggestion.recurring", {
+          id, recurring_id: rid, expected_date: day(text(r.next_date)),
+        });
+        return pending(q.id, `Pagamento de ${text(r.name)} pelo banco`);
+      }
+      if (args.account_id === undefined || args.category_id === undefined) {
+        throw new ToolInputError("Informe account_id e category_id (ou recurring_id, se for a cobrança de uma recorrente).");
+      }
       if (args.allow_duplicate !== undefined && typeof args.allow_duplicate !== "boolean") {
         throw new ToolInputError("allow_duplicate deve ser verdadeiro ou falso.");
       }

@@ -28,12 +28,15 @@ export const moreActions: (ToolDefinition & { destructive?: boolean })[] = [
     title: "Efetivar recorrente",
     description:
       "Marca a próxima ocorrência de uma recorrente como paga/recebida e cria o lançamento, como o botão Efetivar do app. " +
-      "Informe amount quando o valor real foi diferente do previsto (ex.: conta de luz). Não duplica: a previsão deixa de ficar em aberto.",
+      "Informe amount quando o valor real foi diferente do previsto (ex.: conta de luz). Não duplica: a previsão deixa de ficar em aberto. " +
+      "Se a ocorrência já está lançada (à mão, ou confirmada do banco antes), informe transaction_id: a recorrente avança ligada a esse " +
+      "lançamento, sem lançar de novo.",
     inputSchema: {
       type: "object",
       properties: {
         id: idField,
         amount: amountField,
+        transaction_id: { ...idField, description: "Lançamento que já é esta ocorrência (nada é lançado de novo)" },
         date: { ...dateField, description: "Data da ocorrência esperada (confirmação); padrão: a próxima" },
       },
       required: ["id"],
@@ -393,7 +396,7 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
     }
     case "pay_recurring":
     case "skip_recurring": {
-      only(args, name === "pay_recurring" ? ["id", "amount", "date"] : ["id", "date"]);
+      only(args, name === "pay_recurring" ? ["id", "amount", "date", "transaction_id"] : ["id", "date"]);
       const r = recurring(l, str(args, "id", 256));
       const expected = dateArg(args, "date");
       if (expected && expected !== nextOf(r)) {
@@ -403,6 +406,16 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
         throw new ToolInputError("Parcelamentos não podem ser pulados: a parcela continua devida.");
       }
       const body: Args = { id: text(r.id), expected_date: nextOf(r) };
+      if (name === "pay_recurring" && args.transaction_id !== undefined) {
+        if (args.amount !== undefined) throw new ToolInputError("Com transaction_id o valor é o do lançamento: tire amount.");
+        const t = l.transactions.find((x) => text(x.id) === args.transaction_id);
+        if (!t) throw new ToolInputError("Lançamento não encontrado. Use list_transactions.");
+        if (text(t.type) !== (text(r.payment_type) || "expense")) {
+          throw new ToolInputError("O lançamento é de outro tipo (receita ou despesa) que a recorrente.");
+        }
+        const q = await enqueue("recurring.link", { ...body, transaction_id: text(t.id) });
+        return pending(q.id, "Recorrente ligada ao lançamento");
+      }
       if (name === "pay_recurring") {
         const c = amountCents(args, false);
         if (c !== undefined) body.amount_cents = c;

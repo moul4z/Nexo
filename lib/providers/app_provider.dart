@@ -11,6 +11,8 @@ import '../database/db_helper.dart';
 import '../services/planning_rules.dart';
 import '../services/transaction_metadata_service.dart';
 import '../services/finance_rules.dart';
+import '../services/reconciliation.dart'
+    show RecurringDue, entryDay, recurringFits, textSimilarity;
 import '../services/budget_insights.dart';
 import '../services/billing_cycle.dart';
 import '../services/exchange_rate_service.dart';
@@ -1846,10 +1848,93 @@ class AppProvider extends ChangeNotifier {
   Future<void> skipNextRecurring(RecurringPayment r) =>
       _completeRecurring(r, true);
 
-  Future<void> _completeRecurring(RecurringPayment expected, bool skip) async {
+  /// A bank movement that is the open occurrence of [expected]: the
+  /// recurring is paid with the bank's amount and day, and the suggestion
+  /// is tied to that entry in the same write. Throws when the occurrence was
+  /// completed meanwhile (on this device or another): the suggestion then
+  /// stays in the queue and links itself to that entry.
+  Future<String> payRecurringFromBank(RecurringPayment expected,
+      {required String suggestionId,
+      required double amount,
+      required DateTime paidOn}) async {
+    final id = await _completeRecurring(expected, false,
+        amount: amount, paidOn: paidOn, suggestionId: suggestionId);
+    if (id == null) {
+      throw StateError(
+          'Esta ocorrência já foi resolvida. A lista vai se atualizar.');
+    }
+    return id;
+  }
+
+  /// "Já foi paga": the open occurrence of [expected] is [entryId], an
+  /// entry already in the Nexo (typed by hand, or confirmed from the bank
+  /// before the app knew it was the recurring). The recurring advances and
+  /// nothing new is entered.
+  Future<void> linkRecurringToEntry(
+      RecurringPayment expected, String entryId) async {
+    final entry = transactions.where((t) => t.id == entryId).firstOrNull;
+    if (entry == null) throw StateError('O lançamento não existe mais.');
+    if (entry.type != expected.paymentType) {
+      throw StateError('O lançamento é de outro tipo (receita ou despesa).');
+    }
+    final id = await _completeRecurring(expected, false, linkTo: entry);
+    if (id == null) {
+      throw StateError('Esta ocorrência já foi resolvida.');
+    }
+  }
+
+  /// Entries that may already be the open occurrence of [r]: same type and
+  /// account, a similar name, an amount and a day close to the occurrence
+  /// (the same window the bank movements use), not tied to a recurring yet.
+  List<AppTransaction> recurringPaidCandidates(RecurringPayment r) {
+    if (!r.canComplete || r.hasSkippedInstallments) return const [];
+    final due = RecurringDue(
+        id: r.id,
+        name: r.name,
+        accountId: r.accountId,
+        type: r.paymentType,
+        amountCents: (r.amount * 100).round(),
+        date: r.nextDate);
+    final taken = {
+      for (final t in transactions)
+        if ((transactionMetadata[t.id]?.source ?? '') == 'recurring' ||
+            t.id.startsWith('recurring:'))
+          t.id
+    };
+    return [
+      for (final t in transactions)
+        if (t.type == r.paymentType &&
+            t.accountId == r.accountId &&
+            !taken.contains(t.id) &&
+            !FinanceRules.isNeutral(t, transactionMetadata[t.id]) &&
+            transactionMetadata[t.id]?.isPending != true &&
+            recurringFits(due, (t.amount * 100).round(),
+                entryDay(t.date) - entryDay(r.nextDate)) &&
+            textSimilarity(t.description, r.name) >= .6)
+          t
+    ]..sort((a, b) => (entryDay(a.date) - entryDay(r.nextDate))
+        .abs()
+        .compareTo((entryDay(b.date) - entryDay(r.nextDate)).abs()));
+  }
+
+  /// Completes the next occurrence. Returns the entry that stands for it
+  /// (null when the occurrence was no longer the expected one, or skipped).
+  /// [amount]/[paidOn]: what the bank showed. [linkTo]: an entry already in
+  /// the Nexo that is this occurrence (nothing new is entered).
+  Future<String?> _completeRecurring(RecurringPayment expected, bool skip,
+      {double? amount,
+      DateTime? paidOn,
+      String? suggestionId,
+      AppTransaction? linkTo}) async {
     final db = await DBHelper.database;
-    await ledgerTransaction(db, skip ? 'recurring.skip' : 'recurring.pay',
-        (txn) async {
+    String? done;
+    await ledgerTransaction(
+        db,
+        skip
+            ? 'recurring.skip'
+            : linkTo != null
+                ? 'recurring.link'
+                : 'recurring.pay', (txn) async {
       final rows = await txn.query('recurring_payments',
           where: 'id = ?', whereArgs: [expected.id]);
       if (rows.isEmpty) return;
@@ -1871,23 +1956,34 @@ class AppProvider extends ChangeNotifier {
       // that occurrence, without advancing or consuming the schedule twice.
       final recovery =
           r.hasSkippedInstallments ? r.skippedOccurrences.first : null;
+      // The bank pays the next occurrence; a skipped installment being
+      // repaid is chosen on the Recorrentes screen.
+      if ((suggestionId != null || linkTo != null) && recovery != null) {
+        return;
+      }
       final date = recovery?.date ?? r.nextDate;
-      final amount = recovery?.amount ?? r.amount;
+      final value = amount ?? recovery?.amount ?? r.amount;
       final occurrenceId =
           recovery?.id ?? 'recurring:${r.id}:${date.toIso8601String()}';
-      if (!skip) {
+      if (linkTo != null) {
+        final rows = await txn.query('transactions',
+            columns: ['id'], where: 'id = ?', whereArgs: [linkTo.id]);
+        if (rows.isEmpty) return;
+        done = linkTo.id;
+      } else if (!skip) {
         // Paid before its date: the money moved today, so the entry says
         // today. The schedule and the occurrence keep the original date.
+        // From the bank: the day the bank shows.
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
         final tx = AppTransaction(
             id: occurrenceId,
             type: r.paymentType,
-            amount: amount,
+            amount: value,
             description: r.name,
             accountId: r.accountId,
             categoryId: r.categoryId,
-            date: date.isAfter(today) ? today : date,
+            date: paidOn ?? (date.isAfter(today) ? today : date),
             note: r.notes);
         await txn.insert('transactions', tx.toMap());
         await txn.insert(
@@ -1904,6 +2000,10 @@ class AppProvider extends ChangeNotifier {
         await txn.rawUpdate(
             'UPDATE accounts SET balance = balance + ? WHERE id = ?',
             [_txDelta(tx), tx.accountId]);
+        if (suggestionId != null) {
+          await DBHelper.confirmSuggestion(txn, suggestionId, tx.id);
+        }
+        done = tx.id;
       }
       if (recovery != null) {
         await txn.update('recurring_history', {'action': 'paid'},
@@ -1916,7 +2016,7 @@ class AppProvider extends ChangeNotifier {
               recurringId: r.id,
               action: skip ? 'skipped' : 'paid',
               date: r.nextDate,
-              amount: r.amount,
+              amount: linkTo?.amount ?? value,
               currency: accountById(r.accountId)?.currency ?? settings.currency,
             ).toMap());
         final next = r.calcNextDate();
@@ -1942,6 +2042,7 @@ class AppProvider extends ChangeNotifier {
             !updated.nextDate.isAfter(updated.endDate!))) {
       await _notif.scheduleReminder(updated, settings.currency);
     }
+    return done;
   }
 
   /// Loads history for [recurringId] from DB, caching in memory.

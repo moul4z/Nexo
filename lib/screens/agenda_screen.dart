@@ -10,6 +10,7 @@ import '../utils/finance_input.dart';
 import 'add_transaction_screen.dart';
 import 'card_invoice_screen.dart';
 import 'recurring_detail_screen.dart';
+import 'recurring_screen.dart' show confirmRecurringAction;
 import 'dart:convert';
 import '../services/agenda_ics.dart';
 import '../services/file_output.dart';
@@ -87,6 +88,18 @@ class _AgendaScreenState extends State<AgendaScreen> {
       }
       if (page != null)
         await Navigator.push(context, MaterialPageRoute(builder: (_) => page!));
+      if (mounted) setState(() {});
+      return;
+    }
+    // Paying a recurring asks the same as the Recorrentes screen, including
+    // "já foi paga" when an entry already looks like it.
+    if (event.kind == 'recurring' && action != 'skip') {
+      final r = app.recurring.where((r) => r.id == event.id).firstOrNull;
+      if (r == null ||
+          r.nextActionDate.year != event.date.year ||
+          r.nextActionDate.month != event.date.month ||
+          r.nextActionDate.day != event.date.day) return;
+      await confirmRecurringAction(context, app, r);
       if (mounted) setState(() {});
       return;
     }

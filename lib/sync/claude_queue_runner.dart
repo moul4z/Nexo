@@ -83,6 +83,7 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
         metadata: provider.transactionMetadata,
         accounts: provider.accounts,
         profileName: provider.settings.userName,
+        recurring: provider.recurring,
         writer: AppInboxWriter(provider),
         push: () async => pluggy?.pushNow(),
         every: headless ? Duration.zero : const Duration(minutes: 10));

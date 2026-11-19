@@ -63,7 +63,8 @@ class _AccountReconcileScreenState extends State<AccountReconcileScreen> {
         transactions: app.transactions,
         metadata: app.transactionMetadata,
         accounts: app.accounts,
-        profileName: app.settings.userName);
+        profileName: app.settings.userName,
+        recurring: app.recurring);
     // A slower, older answer never replaces the newer period.
     if (mounted && turn == _loading) setState(() => _result = result);
   }

@@ -61,6 +61,9 @@ export const instructions =
   "Em mudanças em lote (update_transactions, delete_transactions, convert_to_balance_adjustment, merge_categories) rode antes " +
   "com dry_run e mostre o resultado. Quando o saldo não bate com o banco, rode antes reconcile_account: ele mostra o que está " +
   "no banco e não no Nexo, o que só o Nexo tem e quanto da diferença isso explica; lance ou ligue o que falta antes de ajustar. " +
+  "A cobrança de uma assinatura ou conta fixa vinda do banco (list_suggestions com resolution recurring) se confirma com " +
+  "confirm_suggestion e recurring_id, nunca como lançamento solto: a recorrente avança. Uma ocorrência já lançada à mão se liga com " +
+  "pay_recurring e transaction_id. " +
   "Para acertar um saldo com o extrato use adjust_account_balance, nunca uma despesa ou " +
   "receita de ajuste; acertos antigos lançados como receita viram ajuste neutro com convert_to_balance_adjustment. " +
   "Retirar de um objetivo devolve dinheiro à conta; se a reserva era só contábil, use move_goal com move_money false. " +

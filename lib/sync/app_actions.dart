@@ -60,7 +60,8 @@ const appWriteActions = <String, List<String>>{
   'recurring.update': ['update_recurring'],
   'recurring.delete': ['delete_recurring'],
   'recurring.restore': ['undo_request'],
-  'recurring.pay': ['pay_recurring'],
+  'recurring.pay': ['pay_recurring', 'confirm_suggestion'],
+  'recurring.link': ['pay_recurring'],
   'recurring.skip': ['skip_recurring'],
   'recurring.history_insert': ['pay_recurring', 'skip_recurring'],
   // Investments

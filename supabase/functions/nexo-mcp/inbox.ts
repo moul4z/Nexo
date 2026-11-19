@@ -4,7 +4,7 @@
 // itself is only described here, the app does it.
 import { cents, day, type Ledger, meta, metadataIndex, money, num, type Row, text } from "./finance.ts";
 import {
-  direction, type Entry, type Match, type Movement, paymentLegs, reconcile, resolutionLabel, type Rule,
+  direction, type Entry, type Match, type Movement, paymentLegs, reconcile, type RecurringDue, resolutionLabel, type Rule,
 } from "./reconcile.ts";
 import { sharedSettings } from "./settings.ts";
 
@@ -59,6 +59,20 @@ const rules = (l: Ledger): Rule[] =>
     targetAccountId: str(r.target_account_id),
   }));
 
+/// The occurrence a bank movement may pay: the next one of each recurring
+/// that can still be completed (recurringDue in reconciliation.dart). A
+/// skipped installment being repaid is left to the app's screen.
+export function recurringDue(l: Ledger): RecurringDue[] {
+  const skipped = new Set((l.recurringHistory ?? []).filter((h) => h.action === "skipped").map((h) => text(h.recurring_id)));
+  return l.recurring
+    .filter((r) => num(r.amount) > 0 && (!r.end_date || day(text(r.next_date)) <= day(text(r.end_date))) &&
+      !(text(r.recurring_type) === "installment" && skipped.has(text(r.id))))
+    .map((r) => ({
+      id: text(r.id), name: text(r.name), accountId: text(r.account_id),
+      type: text(r.payment_type) || "expense", cents: cents(num(r.amount)), day: day(text(r.next_date)),
+    }));
+}
+
 /// [pending]: the movements waiting for review. [decided]: the ones already
 /// decided around the same days, so an entry linked to one of them does not
 /// answer for another, and an IOF finds its purchase.
@@ -83,6 +97,7 @@ export function classify(l: Ledger, pending: Raw[], decided: Raw[], now: number)
     settled: confirmed.filter((d) => Number(d.amount_cents) > 0)
       .map((d) => ({ movement: movement(d), transactionId: String(d.transaction_id) })),
     rules: rules(l),
+    recurring: recurringDue(l),
     now,
   });
 }
@@ -124,6 +139,9 @@ function advice(m: Match, canWrite: boolean): string {
       return m.automatic
         ? "Uma regra com 'lançar sozinho' cobre este movimento: o app registra no celular."
         : "Uma regra sugere a categoria: confirm_suggestion.";
+    case "recurring":
+      return "É a ocorrência em aberto de uma recorrente (recurring): confirm_suggestion com recurring_id paga a recorrente " +
+        "com o valor e o dia do banco. Não use pay_recurring nem confirme como lançamento solto: a recorrente ficaria em aberto.";
     default:
       return "Novo: confirm_suggestion se for real, ignore_suggestions se não for.";
   }
@@ -135,6 +153,7 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
   const byId = new Map(l.transactions.map((t) => [text(t.id), t]));
   const names = new Map(l.accounts.map((a) => [text(a.id), text(a.name)]));
   const categories = new Map(l.categories.map((c) => [text(c.id), text(c.name)]));
+  const recurrings = new Map(l.recurring.map((r) => [text(r.id), r]));
   const match = new Map(matches.map((m) => [m.id, m]));
   const entry = (id?: string) => {
     const t = id ? byId.get(id) : undefined;
@@ -161,6 +180,13 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
       from_account: m.fromAccountId ? names.get(m.fromAccountId) : undefined,
       to_account: m.toAccountId ? names.get(m.toAccountId) : undefined,
       suggested_category: m.categoryId ? { id: m.categoryId, name: categories.get(m.categoryId) } : undefined,
+      recurring: m.recurringId && recurrings.get(m.recurringId)
+        ? {
+          id: m.recurringId, name: text(recurrings.get(m.recurringId)!.name),
+          expected_date: day(text(recurrings.get(m.recurringId)!.next_date)),
+          expected_amount: money(cents(num(recurrings.get(m.recurringId)!.amount))),
+        }
+        : undefined,
       what_to_do: advice(m, true),
     };
   };

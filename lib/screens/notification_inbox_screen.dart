@@ -16,6 +16,7 @@ import '../services/inbox_reconciler.dart';
 import '../services/inbox_writer.dart';
 import '../services/reconciliation.dart';
 import '../widgets/nexo_ui.dart';
+import '../utils/snackbar.dart';
 import '../services/category_memory.dart';
 import '../services/subscription_detector.dart';
 import 'recurring_screen.dart';
@@ -103,6 +104,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
           metadata: app.transactionMetadata,
           accounts: app.accounts,
           profileName: app.settings.userName,
+          recurring: app.recurring,
           writer: _writer(here: createHere));
       // What the app settled leaves the assistant's queue too.
       unawaited(PluggyInbox.instance?.pushNow());
@@ -152,6 +154,45 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
     } finally {
       _acting = false;
     }
+  }
+
+  /// The bank movement is the open occurrence of [r]: the recurring is paid
+  /// with the bank's amount and day. A different amount (the subscription
+  /// went up) is offered as the new value, never applied alone.
+  Future<void> _payRecurring(Match m, RecurringPayment r) async {
+    final app = context.read<AppProvider>();
+    final mv = m.movement;
+    final amount = mv.amountCents / 100;
+    var paid = false;
+    await _act(() async {
+      await app.payRecurringFromBank(r,
+          suggestionId: mv.id, amount: amount, paidOn: mv.occurredAt);
+      paid = true;
+    }, '${r.name}: paga com o valor do banco.');
+    if (!paid || !mounted || r.amount <= 0) return;
+    if ((amount - r.amount).abs() / r.amount <= recurringPriceChange) return;
+    final money = (double v) => formatAmount(v, 'BRL');
+    final update = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text('${r.name} mudou de valor'),
+                content: Text(
+                    'Estava cadastrada com ${money(r.amount)} e o banco cobrou ${money(amount)}. Usar o novo valor daqui em diante?'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d, false),
+                      child: const Text('Manter')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(d, true),
+                      child: const Text('Usar o novo valor')),
+                ]));
+    if (update != true || !mounted) return;
+    final current = app.recurring.where((x) => x.id == r.id).firstOrNull;
+    if (current == null) return;
+    await app.updateRecurring(RecurringPayment.fromMap(current.toMap(),
+        skippedOccurrences: current.skippedOccurrences)
+      ..amount = amount);
+    if (mounted) showAppSnackbar(context, 'Valor de ${r.name} atualizado.');
   }
 
   Future<void> _undoIgnore(Iterable<String> ids) async {
@@ -349,8 +390,22 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
         .toList();
     final ownSingles =
         matches.where((m) => m.resolution == Resolution.ownName).toList();
+    // A recurring that no longer exists is just a new movement.
+    final recurringOf = {
+      for (final m in matches)
+        if (m.resolution == Resolution.recurring)
+          if (app.recurring.where((r) => r.id == m.recurringId).firstOrNull
+              case final r?)
+            m.movement.id: r
+    };
+    final bills = [
+      for (final m in matches)
+        if (recurringOf.containsKey(m.movement.id)) m
+    ];
     final fresh = matches
         .where((m) =>
+            (m.resolution == Resolution.recurring &&
+                !recurringOf.containsKey(m.movement.id)) ||
             m.resolution == Resolution.newEntry ||
             m.resolution == Resolution.rule ||
             m.resolution == Resolution.yieldIncome)
@@ -366,6 +421,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
         ownPairs.length +
         ownSingles.length +
         iofAlone.length +
+        bills.length +
         fresh.length;
     final resolved = state?.resolved ?? const <AutoResolved>[];
     final deferred = state?.deferred ?? const <Match>[];
@@ -769,6 +825,44 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                                       categoryId: m.categoryId),
                                   child: const Text('Lançar separado')),
                             ])),
+                ],
+                if (bills.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const NexoSectionTitle('Recorrentes',
+                      subtitle:
+                          'O banco cobrou o que estava previsto: pagar a recorrente, sem lançamento solto',
+                      icon: Icons.event_repeat),
+                  const SizedBox(height: 8),
+                  for (final m in bills)
+                    Builder(builder: (context) {
+                      final r = recurringOf[m.movement.id]!;
+                      final cents = (r.amount * 100).round();
+                      final due = DateFormat('dd/MM').format(r.nextDate);
+                      return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: movementCard(m,
+                              hint: Text(
+                                  'É ${r.name}, prevista para $due (${money(cents)})'
+                                  '${cents == m.movement.amountCents ? '.' : '. O banco cobrou ${money(m.movement.amountCents)}.'}',
+                                  style: small),
+                              extra: [
+                                FilledButton(
+                                    onPressed: () => _payRecurring(m, r),
+                                    child: const Text('Pagar a recorrente')),
+                                TextButton(
+                                    onPressed: () => _review(_row(m),
+                                        categoryId: r.categoryId),
+                                    child: const Text('Lançar separado')),
+                                TextButton(
+                                    onPressed: () => _act(
+                                        () => InboxReconciler.ignoreAll(
+                                            [m.movement.id]),
+                                        'Sugestão ignorada.',
+                                        undo: () =>
+                                            _undoIgnore([m.movement.id])),
+                                    child: const Text('Ignorar')),
+                              ]));
+                    }),
                 ],
                 if (fresh.isNotEmpty) ...[
                   const SizedBox(height: 16),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/snackbar.dart';
 import '../widgets/nexo_ui.dart';
 import 'package:provider/provider.dart';
 import '../database/db_helper.dart';
@@ -598,6 +599,51 @@ class _RecurringTile extends StatelessWidget {
 Future<void> confirmRecurringAction(
     BuildContext context, AppProvider app, RecurringPayment recurring,
     {bool skip = false}) async {
+  // An entry that already looks like this occurrence (typed by hand, or
+  // confirmed from the bank): link to it instead of entering it again.
+  final twin = skip ? null : app.recurringPaidCandidates(recurring).firstOrNull;
+  if (twin != null) {
+    final currency =
+        app.accountById(twin.accountId)?.currency ?? app.settings.currency;
+    final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('Parece que já foi lançado'),
+                content: Text('"${twin.description}" em ${ptDate(twin.date)}'
+                    '${app.settings.hideBalance ? '' : ', ${formatAmount(twin.amount, currency)}'}'
+                    ', na mesma conta.\n\nSe for esta ocorrência de ${recurring.name}, ligue a ele: a recorrente avança e nada é lançado de novo.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancelar')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, 'new'),
+                      child: const Text('Registrar outro')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, 'link'),
+                      child: const Text('Já foi paga')),
+                ]));
+    if (choice == null || !context.mounted) return;
+    if (choice == 'link') {
+      try {
+        await app.linkRecurringToEntry(recurring, twin.id);
+        if (context.mounted) {
+          showAppSnackbar(context,
+              'Ligado a "${twin.description}". A recorrente avançou sem lançar de novo.');
+        }
+      } catch (e) {
+        if (context.mounted) {
+          showAppSnackbar(
+              context,
+              e is StateError
+                  ? e.message
+                  : 'Não foi possível ligar. Confira o histórico.');
+        }
+      }
+      return;
+    }
+  }
+  if (!context.mounted) return;
   final account = app.accountById(recurring.accountId);
   final value = app.settings.hideBalance
       ? 'valor oculto'

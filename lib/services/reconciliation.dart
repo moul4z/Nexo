@@ -136,6 +136,11 @@ enum Resolution {
   /// A rule the person marked "lançar sozinho".
   rule,
 
+  /// The open occurrence of a recurring payment (the subscription, the
+  /// salary): confirming it pays the recurring with the bank's amount and
+  /// day, instead of a loose entry that leaves the recurring open.
+  recurring,
+
   /// Nothing similar in the Nexo: probably not registered yet.
   newEntry,
 }
@@ -152,7 +157,8 @@ class Match {
       this.toAccountId,
       this.waiting = false,
       this.ruleId,
-      this.withIof});
+      this.withIof,
+      this.recurringId});
   final PendingMovement movement;
   final Resolution resolution;
 
@@ -183,6 +189,55 @@ class Match {
 
   /// Linked together with the IOF charged the next day.
   final PendingMovement? withIof;
+
+  /// For [Resolution.recurring]: the recurring payment it pays.
+  final String? recurringId;
+}
+
+/// The next occurrence of a recurring payment, as the reconciliation reads
+/// it: what the bank should show if it was paid.
+class RecurringDue {
+  const RecurringDue(
+      {required this.id,
+      required this.name,
+      required this.accountId,
+      required this.type,
+      required this.amountCents,
+      required this.date});
+  final String id, name, accountId;
+
+  /// expense | income
+  final String type;
+  final int amountCents;
+  final DateTime date;
+}
+
+/// The occurrences a bank movement may pay: the next one of each recurring
+/// that can still be completed. A skipped installment being repaid is left
+/// to the Recorrentes screen (the connector reads the same way).
+List<RecurringDue> recurringDue(List<RecurringPayment> recurring) => [
+      for (final r in recurring)
+        if (r.canComplete && !r.hasSkippedInstallments && r.amount > 0)
+          RecurringDue(
+              id: r.id,
+              name: r.name,
+              accountId: r.accountId,
+              type: r.paymentType,
+              amountCents: _cents(r.amount),
+              date: r.nextDate)
+    ];
+
+/// Above this change in price, paying a recurring from the bank offers
+/// the new amount as the recurring's value (never applied alone).
+const recurringPriceChange = .05;
+
+/// How far the bank may be from the recurring: the amount within 7.5% (or
+/// R$ 1), the day from 3 before to 5 after.
+bool recurringFits(RecurringDue r, int cents, int dayDiff) {
+  final tolerance = (r.amountCents * .075).round();
+  return (cents - r.amountCents).abs() <= (tolerance > 100 ? tolerance : 100) &&
+      dayDiff >= -3 &&
+      dayDiff <= 5;
 }
 
 /// A card bill payment already in the Nexo: the two legs of the transfer.
@@ -346,6 +401,7 @@ List<Match> reconcile({
   List<PaymentLegs>? payments,
   List<(PendingMovement, String)> settled = const [],
   List<ReconcileRule> rules = const [],
+  List<RecurringDue> recurring = const [],
   DateTime? now,
 }) {
   final out = <String, Match>{};
@@ -373,7 +429,8 @@ List<Match> reconcile({
           String? to,
           bool waiting = false,
           String? ruleId,
-          PendingMovement? withIof}) =>
+          PendingMovement? withIof,
+          String? recurringId}) =>
       out[m.id] = Match(m, r,
           automatic: automatic,
           transaction: transaction,
@@ -385,7 +442,8 @@ List<Match> reconcile({
           toAccountId: to,
           waiting: waiting,
           ruleId: ruleId,
-          withIof: withIof);
+          withIof: withIof,
+          recurringId: recurringId);
   bool mentionsOwner(PendingMovement m) {
     if (m.sameOwner == true) return true;
     final n = normalizeMerchant(m.words);
@@ -836,6 +894,55 @@ List<Match> reconcile({
       set(o.withIof!, Resolution.linked,
           automatic: true, transaction: o.e, pair: o.m, score: 85);
     }
+  }
+
+  // 6b. The open occurrence of a recurring payment: same direction and
+  // account, a similar name, an amount and a day close to what was
+  // expected. Never over an entry that may be the same (that is a question
+  // below), and never by itself: the person confirms, and the recurring
+  // advances instead of staying open next to a loose entry.
+  bool maybeTwin(_Option o) =>
+      !used.contains(o.e.id) &&
+      !dismissedPairs.contains('${o.m.id}|${o.e.id}') &&
+      (o.wrong
+          ? o.exact && o.days <= 3
+          : o.score >= 45 &&
+              (o.days <= 3 ||
+                  textSimilarity(o.m.description, o.e.description) >= .6));
+  final dues = <(PendingMovement, int, RecurringDue, int, int)>[];
+  for (final m in rest) {
+    if (out.containsKey(m.id) ||
+        options.any((o) => o.m.id == m.id && maybeTwin(o))) {
+      continue;
+    }
+    for (final (ri, r) in recurring.indexed) {
+      if (r.type != (isOut(m) ? 'expense' : 'income')) continue;
+      if (m.nexoAccountId != null
+          ? r.accountId != m.nexoAccountId
+          : creditAccounts.isNotEmpty &&
+              (m.medium == 'credit') != creditAccounts.contains(r.accountId)) {
+        continue;
+      }
+      final diff = mday(m) - entryDay(r.date);
+      if (!recurringFits(r, m.amountCents, diff) ||
+          textSimilarity(m.words, r.name) < .6) {
+        continue;
+      }
+      dues.add((m, (m.amountCents - r.amountCents).abs(), r, diff.abs(), ri));
+    }
+  }
+  dues.sort((a, b) {
+    var c = a.$2 - b.$2;
+    if (c == 0) c = a.$4 - b.$4;
+    if (c == 0) c = pos(a.$1) - pos(b.$1);
+    if (c == 0) c = a.$5 - b.$5;
+    return c;
+  });
+  final paidNow = <String>{};
+  for (final (m, _, r, _, _) in dues) {
+    if (out.containsKey(m.id) || paidNow.contains(r.id)) continue;
+    paidNow.add(r.id);
+    set(m, Resolution.recurring, recurringId: r.id);
   }
 
   // 7. Rules the person marked "lançar sozinho". Never over a likely

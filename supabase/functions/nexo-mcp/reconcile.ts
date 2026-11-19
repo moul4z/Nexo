@@ -58,7 +58,25 @@ export interface Rule {
 
 export type Resolution =
   | "linked" | "maybe" | "internal" | "ownTransfer" | "ownName" | "invoicePayment"
-  | "reversal" | "reserve" | "yield" | "iof" | "rule" | "newEntry";
+  | "reversal" | "reserve" | "yield" | "iof" | "rule" | "recurring" | "newEntry";
+
+/// The next occurrence of a recurring payment: what the bank should show if
+/// it was paid (recurringDue in reconciliation.dart).
+export interface RecurringDue {
+  id: string;
+  name: string;
+  accountId: string;
+  type: string; // expense | income
+  cents: number;
+  day: string; // YYYY-MM-DD
+}
+
+/// How far the bank may be from the recurring: the amount within 7.5% (or
+/// R$ 1), the day from 3 before to 5 after.
+export function recurringFits(r: RecurringDue, cents: number, dayDiff: number): boolean {
+  const tolerance = Math.round(r.cents * 0.075);
+  return Math.abs(cents - r.cents) <= Math.max(tolerance, 100) && dayDiff >= -3 && dayDiff <= 5;
+}
 
 export interface Match {
   id: string;
@@ -78,6 +96,8 @@ export interface Match {
   waiting?: boolean;
   /// Linked together with the IOF charged the next day.
   withIof?: string;
+  /// For "recurring": the recurring payment it pays.
+  recurringId?: string;
 }
 
 export interface Options {
@@ -90,6 +110,8 @@ export interface Options {
   /// purchase an IOF belongs to is usually one of them.
   settled?: { movement: Movement; transactionId: string }[];
   rules?: Rule[];
+  /// The open occurrence of each recurring payment.
+  recurring?: RecurringDue[];
   learnedCategory?: (m: Movement) => string | null;
   now?: number;
 }
@@ -447,6 +469,36 @@ export function reconcile(movements: Movement[], entries: Entry[], options: Opti
     if (o.withIof) set(o.withIof, { resolution: "linked", automatic: true, transactionId: o.e.id, pairId: o.m.id, score: 85 });
   }
 
+  // 6b. The open occurrence of a recurring payment: same direction and
+  // account, a similar name, an amount and a day close to what was
+  // expected. Never over an entry that may be the same (that is a question
+  // below), and never by itself: the person confirms, and the recurring
+  // advances instead of staying open next to a loose entry.
+  const maybeTwin = (o: Option) =>
+    !used.has(o.e.id) && !dismissed.has(`${o.m.id}|${o.e.id}`) &&
+    (o.wrong ? o.exact && o.days <= 3
+      : o.score >= 45 && (o.days <= 3 || textSimilarity(o.m.description, o.e.description) >= 0.6));
+  const dues: { m: Movement; gap: number; r: RecurringDue; days: number; ri: number }[] = [];
+  for (const m of rest) {
+    if (out.has(m.id) || options_.some((o) => o.m.id === m.id && maybeTwin(o))) continue;
+    for (const [ri, r] of (options.recurring ?? []).entries()) {
+      if (r.type !== (isOut(m) ? "expense" : "income")) continue;
+      if (m.nexoAccountId
+        ? r.accountId !== m.nexoAccountId
+        : credit.size > 0 && (m.medium === "credit") !== credit.has(r.accountId)) continue;
+      const diff = mday(m) - entryDay(r.day);
+      if (!recurringFits(r, m.amountCents, diff) || textSimilarity(words(m), r.name) < 0.6) continue;
+      dues.push({ m, gap: Math.abs(m.amountCents - r.cents), r, days: Math.abs(diff), ri });
+    }
+  }
+  dues.sort((a, b) => a.gap - b.gap || a.days - b.days || pos(a.m) - pos(b.m) || a.ri - b.ri);
+  const paidNow = new Set<string>();
+  for (const { m, r } of dues) {
+    if (out.has(m.id) || paidNow.has(r.id)) continue;
+    paidNow.add(r.id);
+    set(m, { resolution: "recurring", automatic: false, recurringId: r.id });
+  }
+
   // 7. Rules the person marked "lançar sozinho". Never over a likely
   // duplicate: a close entry with the same amount makes it a question.
   for (const m of open()) {
@@ -521,5 +573,6 @@ export const resolutionLabel: Record<Resolution, string> = {
   yield: "Rendimento",
   iof: "IOF da compra internacional",
   rule: "Regra de importação",
+  recurring: "Recorrente prevista",
   newEntry: "Nova",
 };

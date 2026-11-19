@@ -68,7 +68,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Categorias: criar, renomear, editar, excluir | add_category, rename_category, update_category, delete_category | ok | |
 | Categorias: juntar | merge_categories | ok | dry_run |
 | Subcategorias | update_transaction, update_transactions | ok | no app a subcategoria é texto do lançamento |
-| Recorrentes: ver, efetivar, pular | get_recurring, pay_recurring, skip_recurring | ok | valor real diferente do previsto |
+| Recorrentes: ver, efetivar, pular | get_recurring, pay_recurring, skip_recurring | ok | valor real diferente do previsto; 1.19: `transaction_id` liga a ocorrência a um lançamento que já existe ("Já foi paga") |
 | Recorrentes: criar, alterar, excluir | add_recurring, update_recurring, delete_recurring | ok | frequência, tipo, observação, lembrete, sem fim |
 | Agenda: contas a vencer | get_upcoming_bills, get_cash_projection | ok | |
 | Investir: carteira | get_investment_summary, get_investments | ok | operações com id; em reais, com `by_institution`, `by_currency`, `by_country` |
@@ -89,6 +89,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Para revisar: confirmar com edição | confirm_suggestion | ok | conta, categoria, tipo, descrição, subcategoria, observação |
 | Para revisar: como transferência | confirm_suggestion_as_transfer | ok | |
 | Para revisar: é o mesmo lançamento / somar o IOF à compra | link_suggestion | ok | 1.18: vincula a um lançamento que já existe; `add_amount` soma o valor (IOF) |
+| Para revisar: é a cobrança de uma recorrente ("Pagar a recorrente") | confirm_suggestion com `recurring_id` | ok | 1.19: paga a ocorrência em aberto com o valor e o dia do banco; `list_suggestions` mostra `resolution: recurring` |
 | Para revisar: ignorar, por filtro | ignore_suggestions | ok | prévia |
 | Regras automáticas de categoria | get_import_rules, save_import_rule, delete_import_rule | ok | |
 | Dados do banco até quando | get_bank_sync_status | ok | |

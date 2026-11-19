@@ -164,6 +164,7 @@ class InboxReconciler {
       required Map<String, TransactionMetadata> metadata,
       required List<Account> accounts,
       required String profileName,
+      List<RecurringPayment> recurring = const [],
       InboxWriter? writer,
       Future<void> Function()? push,
       Duration every = const Duration(minutes: 10)}) async {
@@ -180,6 +181,7 @@ class InboxReconciler {
           metadata: metadata,
           accounts: accounts,
           profileName: profileName,
+          recurring: recurring,
           writer: writer);
       await push?.call();
     } catch (_) {
@@ -267,6 +269,7 @@ class InboxReconciler {
     required Map<String, TransactionMetadata> metadata,
     required List<Account> accounts,
     String profileName = '',
+    List<RecurringPayment> recurring = const [],
     DateTime? now,
   }) async {
     final db = await DBHelper.database;
@@ -295,6 +298,7 @@ class InboxReconciler {
         to: to,
         ownerNames: await _owners(profileName),
         rules: _rules(await ImportRulesService.load()),
+        recurring: recurringDue(recurring),
         dismissedPairs: await _set(_dismissedKey),
         alreadyAnswered: {
           for (final r in answered) r['transaction_id'] as String
@@ -309,6 +313,7 @@ class InboxReconciler {
     required Map<String, TransactionMetadata> metadata,
     List<Account> accounts = const [],
     String profileName = '',
+    List<RecurringPayment> recurring = const [],
     InboxWriter? writer,
     DateTime? now,
   }) async {
@@ -347,6 +352,7 @@ class InboxReconciler {
               (PendingMovement.fromRow(r), r['transaction_id'] as String)
         ],
         rules: _rules(rules),
+        recurring: recurringDue(recurring),
         now: now,
         learnedCategory: (m) {
           final type = m.outgoing ? 'expense' : 'income';

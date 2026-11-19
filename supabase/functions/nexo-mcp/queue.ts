@@ -10,8 +10,14 @@ export const DOLLAR_BUILD = 58;
 /// save them as a plain category rule.
 export const RECONCILE_BUILD = 60;
 
+/// First build that pays a recurring from a bank movement, or ties it to an
+/// entry already in the Nexo (1.19.0+61). An older app does not know these
+/// requests and leaves them for another device.
+export const RECURRING_BANK_BUILD = 61;
+
 /// The minimum app build a request needs, or null when any version can.
 export function minBuildFor(kind: string, args: Record<string, unknown>): number | null {
+  if (kind === "suggestion.recurring" || kind === "recurring.link") return RECURRING_BANK_BUILD;
   if (kind === "rule.save" && (args.auto === true || args.type === "transfer" || args.type === "internal")) {
     return RECONCILE_BUILD;
   }

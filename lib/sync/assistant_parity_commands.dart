@@ -35,7 +35,8 @@ class AssistantParityCommands {
     'investment.link', 'loan.add', 'loan.edit', 'loan.delete', 'loan.unpay',
     'lended.edit', 'lended.delete', 'person.edit', 'person.delete',
     'rule.save', 'rule.delete', 'suggestion.transfer', 'suggestion.accept',
-    'suggestion.link', 'bank.refresh',
+    'suggestion.link', 'bank.refresh', 'suggestion.recurring',
+    'recurring.link',
   ];
 
   static double _reais(Object? cents) => (cents as num).toInt() / 100;
@@ -640,7 +641,21 @@ class AssistantParityCommands {
       case 'suggestion.transfer':
       case 'suggestion.accept':
       case 'suggestion.link':
+      case 'suggestion.recurring':
         return _suggestion(kind, a);
+      case 'recurring.link':
+        // The open occurrence is an entry already in the Nexo: the
+        // recurring advances, nothing is entered again.
+        final r = app.recurring.where((x) => x.id == a['id']).firstOrNull ??
+            (throw StateError('A recorrente não existe mais.'));
+        _sameOccurrence(r, a['expected_date']);
+        final entryId = a['transaction_id'] as String;
+        await app.linkRecurringToEntry(r, entryId);
+        return {
+          'recurring_id': r.id,
+          'transaction_id': entryId,
+          'message': '${r.name} ligada ao lançamento; nada foi lançado de novo.'
+        };
       case 'bank.refresh':
         final inbox = PluggyInbox.instance;
         if (inbox == null) {
@@ -689,8 +704,23 @@ class AssistantParityCommands {
         createdAt: old?.createdAt);
   }
 
+  /// The request was made for the occurrence the assistant saw: another
+  /// one (paid or skipped meanwhile) is not silently completed instead.
+  void _sameOccurrence(RecurringPayment r, Object? expected) {
+    if (expected is! String) return;
+    final want = _day(expected);
+    final next = r.nextActionDate;
+    if (next.year != want.year ||
+        next.month != want.month ||
+        next.day != want.day) {
+      throw StateError(
+          'A próxima ocorrência de ${r.name} mudou (agora ${next.day}/${next.month}). Consulte de novo.');
+    }
+  }
+
   /// Open Finance suggestion as a transfer between two own accounts, or as
-  /// an entry with subcategory and note (the review screen's options).
+  /// an entry with subcategory and note (the review screen's options), or
+  /// as the bill of a recurring payment.
   Future<Map<String, Object?>> _suggestion(
       String kind, Map<String, dynamic> a) async {
     final sid = a['id'] as String;
@@ -714,6 +744,29 @@ class AssistantParityCommands {
     }
     final amount = (s['amount_cents'] as int) / 100;
     final date = DateTime.fromMillisecondsSinceEpoch(s['occurred_at'] as int);
+    if (kind == 'suggestion.recurring') {
+      final r =
+          app.recurring.where((x) => x.id == a['recurring_id']).firstOrNull ??
+              (throw StateError('A recorrente não existe mais.'));
+      _sameOccurrence(r, a['expected_date']);
+      final out = s['direction'] == 'out' ||
+          (s['direction'] != 'in' &&
+              s['kind'] != 'income' &&
+              s['kind'] != 'refund');
+      if (r.paymentType != (out ? 'expense' : 'income')) {
+        throw StateError(
+            '${r.name} é ${r.paymentType == 'income' ? 'receita' : 'despesa'} e o movimento ${out ? 'sai' : 'entra'}.');
+      }
+      final id = await app.payRecurringFromBank(r,
+          suggestionId: sid, amount: amount, paidOn: date);
+      return {
+        'transaction_id': id,
+        'recurring_id': r.id,
+        'message': (amount - r.amount).abs() >= .005
+            ? '${r.name} paga com o valor do banco (o cadastro continua com o valor antigo; use update_recurring se mudou).'
+            : '${r.name} paga.'
+      };
+    }
     if (kind == 'suggestion.link') {
       // The same movement as an entry that already exists: nothing new.
       final entry = app.transactions

@@ -58,6 +58,7 @@ AccountReconciliation reconcileAccount({
   required DateTime to,
   List<String> ownerNames = const [],
   List<ReconcileRule> rules = const [],
+  List<RecurringDue> recurring = const [],
   Set<String> dismissedPairs = const {},
   Set<String> alreadyAnswered = const {},
   DateTime? now,
@@ -107,6 +108,7 @@ AccountReconciliation reconcileAccount({
             (movement(r), r['transaction_id'] as String)
       ],
       rules: rules,
+      recurring: recurring,
       now: now);
 
   // Entries a bank movement already answers for.

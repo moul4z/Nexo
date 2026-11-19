@@ -81,6 +81,17 @@ void main() {
                   auto: r['auto'] == true,
                   targetAccountId: r['targetAccountId'] as String?)
           ],
+          recurring: [
+            for (final r in (c['recurring'] as List? ?? const [])
+                .cast<Map<String, dynamic>>())
+              RecurringDue(
+                  id: r['id'] as String,
+                  name: r['name'] as String,
+                  accountId: r['accountId'] as String,
+                  type: r['type'] as String,
+                  amountCents: r['cents'] as int,
+                  date: DateTime.parse(r['day'] as String))
+          ],
           now: at(fixture['now'] as String));
       final got = {
         for (final m in result)
@@ -98,6 +109,7 @@ void main() {
             if (m.categoryId != null) 'categoryId': m.categoryId!,
             if (m.ruleId != null) 'ruleId': m.ruleId!,
             if (m.withIof != null) 'withIof': m.withIof!.id,
+            if (m.recurringId != null) 'recurringId': m.recurringId!,
           }
       };
       expect(got, c['expect']);

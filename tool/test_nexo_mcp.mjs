@@ -56,6 +56,7 @@ await test('a real expense is never neutral because of what the bank calls it', 
           creditAccounts: new Set(cases.creditAccounts),
           settled: (c.settled ?? []).map((s) => ({ movement: movement(s.movement), transactionId: s.transactionId })),
           rules: (c.rules ?? []).map((r) => ({ categoryId: '', targetAccountId: null, ...r })),
+          recurring: c.recurring ?? [],
           now: at(cases.now),
         });
       const got = Object.fromEntries(result.map((m) => {
@@ -1332,6 +1333,46 @@ await test('cash projection: the card subscription enters the invoice of its cyc
   assert.deepEqual(invoices.filter((t) => t.date > '2026-11-26').map((t) => [t.date, t.amount]),
     [['2026-12-26', -21.9], ['2027-01-26', -21.9]], 'the invoices after the open one');
   assert(!cash.timeline.some((t) => t.what.startsWith('Spotify')), 'never twice: only through the invoice');
+});
+
+await test('a recurring bill from the bank: shown as the recurring, paid through confirm_suggestion; an entry already there links', async () => {
+  const q = smartQueue();
+  const at = (d) => Date.parse(`${d}T15:00:00Z`);
+  q.deps.now = () => at('2026-11-06');
+  const row = (id, date, cents, description, extra = {}) => ({ id: `pluggy:${id}`, bank: 'Banco A', occurred_at: at(date), amount_cents: cents,
+    kind: 'expense', medium: 'bank', description, direction: 'out', account_id: 'acc-1', nexo_account_id: 'main', settled: true, ...extra });
+  q.deps.suggestions = async () => [
+    row('sp', '2026-11-02', 2190, 'Spotify', { medium: 'credit', account_id: 'acc-3', nexo_account_id: 'nu' }),
+    row('sal', '2026-11-05', 186000, 'Salario Empresa Exemplo', { kind: 'income', direction: 'in' }),
+  ];
+  const list = await pact(q, 'list_suggestions', {});
+  const byId = Object.fromEntries(list.suggestions.map((s) => [s.id, s]));
+  assert.equal(byId['pluggy:sp'].resolution, 'recurring');
+  assert.deepEqual(byId['pluggy:sp'].recurring, { id: 'spotify', name: 'Spotify', expected_date: '2026-11-02', expected_amount: 21.9 });
+  assert.match(byId['pluggy:sp'].what_to_do, /recurring_id/);
+  assert.equal(byId['pluggy:sal'].recurring.id, 'sal', 'a salary 3% above what was registered is still the salary');
+
+  await pact(q, 'confirm_suggestion', { id: 'pluggy:sp', recurring_id: 'spotify' });
+  assert.deepEqual([q.items.at(-1).kind, q.items.at(-1).args],
+    ['suggestion.recurring', { id: 'pluggy:sp', recurring_id: 'spotify', expected_date: '2026-11-02' }]);
+  const sent = q.items.length;
+  await assert.rejects(pact(q, 'confirm_suggestion', { id: 'pluggy:sp', recurring_id: 'spotify', account_id: 'nu' }), /tire account_id/);
+  await assert.rejects(pact(q, 'confirm_suggestion', { id: 'pluggy:sp', recurring_id: 'sal' }), /receita e o movimento sai/);
+  await assert.rejects(pact(q, 'confirm_suggestion', { id: 'pluggy:sp', recurring_id: 'nope' }), /Recorrente não encontrada/);
+  await assert.rejects(pact(q, 'confirm_suggestion', { id: 'pluggy:sp' }), /account_id e category_id/);
+
+  // "Já foi paga": the occurrence is an entry already in the Nexo.
+  await pact(q, 'pay_recurring', { id: 'net', transaction_id: 'reserva' });
+  assert.deepEqual([q.items.at(-1).kind, q.items.at(-1).args],
+    ['recurring.link', { id: 'net', expected_date: '2026-11-10', transaction_id: 'reserva' }]);
+  await assert.rejects(pact(q, 'pay_recurring', { id: 'net', transaction_id: 'reserva', amount: 10 }), /tire amount/);
+  await assert.rejects(pact(q, 'pay_recurring', { id: 'net', transaction_id: 'acerto-antigo' }), /outro tipo/);
+  await assert.rejects(pact(q, 'pay_recurring', { id: 'net', transaction_id: 'nope' }), /não encontrado/);
+  assert.equal(q.items.length, sent + 1, 'nothing refused was queued');
+  // Only an app that knows these requests applies them.
+  const { minBuildFor } = await import('../supabase/functions/nexo-mcp/queue.ts');
+  assert.equal(minBuildFor('suggestion.recurring', {}), 61);
+  assert.equal(minBuildFor('recurring.link', {}), 61);
 });
 
 await test('reconcile_account: what only the bank has, what only the Nexo has, and how much that explains', async () => {
