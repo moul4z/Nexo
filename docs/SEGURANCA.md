@@ -39,6 +39,27 @@ segredos. Resultado da revisão das migrations até `202610230001` e do código.
   app, auditoria por chamada sem conteúdo financeiro.
 - Chave de serviço lida de `SUPABASE_SERVICE_ROLE_KEY`/`SUPABASE_SECRET_KEYS`
   só dentro das funções.
+- Desde a 1.19 (migration `202611200002`), o endereço do conector **vale 90 dias**.
+  Ele é renovado no app sem mudar o endereço e tem **limite de 120 chamadas por
+  minuto**: acima disso, o servidor responde 429 e não lê nada. Um pedido só é
+  lido pelo conector do mesmo acervo.
+
+## O que o servidor guarda de cada movimento do banco
+
+- Em `nexo_pluggy_private.suggestions` ficam valor, data, descrição do banco,
+  conta, sentido, as referências da operação e o **nome de quem pagou ou
+  recebeu** (`counterparty`, até 60 caracteres). O CPF/CNPJ nunca é guardado:
+  só a comparação "mesmo dono" (`same_owner`).
+- **Por quanto tempo:** não há apagamento por idade no servidor. As linhas
+  ficam enquanto a conexão existir e são apagadas junto com ela
+  (`nexo_pluggy_remove_item`, `on delete cascade`). Uma compra que o banco
+  deixou de mostrar não é apagada: ganha `vanished_at` (1.19).
+- No aparelho, a sugestão pendente expira em 35 dias. Depois disso fica só um
+  registro sem descrição nem valor, apagado em 90 dias
+  (`NotificationInbox.ingest`).
+- Se for preciso apagar os nomes antigos sem desconectar o banco, o caminho
+  é uma migration que limpe `counterparty` de linhas decididas há mais de N
+  dias. Ainda não existe; fica a critério do dono.
 
 ## Checklist de rotação (quando suspeitar de vazamento, ou 1×/ano)
 
