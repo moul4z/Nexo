@@ -60,6 +60,7 @@ await test('a real expense is never neutral because of what the bank calls it', 
           settled: (c.settled ?? []).map((s) => ({ movement: movement(s.movement), transactionId: s.transactionId })),
           rules: (c.rules ?? []).map((r) => ({ categoryId: '', targetAccountId: null, ...r })),
           recurring: c.recurring ?? [],
+          receivables: c.receivables ?? [],
           now: at(cases.now),
         });
       const got = Object.fromEntries(result.map((m) => {

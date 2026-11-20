@@ -872,7 +872,7 @@ class DBHelper {
     await createSharedSettings(db);
     await schema29(db);
     await schema30(db);
-    await schema31(db); // nothing to do: the table is born with the events
+    await schema31(db); // the operations are born with the events
     await _insertDefaults(db);
   }
 
@@ -931,6 +931,11 @@ class DBHelper {
   /// old table goes, then its index and sync triggers as they were. All in
   /// the upgrade's transaction: any failure leaves the file as it was.
   static Future<void> schema31(DatabaseExecutor db) async {
+    // Also only adds a column: the name a person's Pix shows (synced).
+    final people = await db.rawQuery('PRAGMA table_info(lended_people)');
+    if (people.isNotEmpty && !people.any((c) => c['name'] == 'pix_name')) {
+      await db.execute('ALTER TABLE lended_people ADD COLUMN pix_name TEXT');
+    }
     const table = 'investment_operations';
     final found = await db.rawQuery(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",

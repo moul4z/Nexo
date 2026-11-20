@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/db_helper.dart';
 import '../models/models.dart';
 import '../models/transaction_metadata.dart';
+import '../sync/ledger_capture.dart';
 import '../sync/sync_controller.dart';
 import 'account_reconciliation.dart';
 import 'diagnostics.dart';
@@ -110,6 +111,11 @@ abstract interface class InboxWriter {
 
   /// Deletes what the app registered by itself (undo).
   Future<void> deleteEntry(String transactionId);
+
+  /// [m] is someone paying back their part: the "a receber"
+  /// [receivableId] is received into [m]'s account, on the bank's day, and
+  /// tied to [m]. Returns the receipt's entry id.
+  Future<String> receive(PendingMovement m, String receivableId);
 }
 
 /// The phone writes; a device that does not sync writes for itself.
@@ -166,6 +172,7 @@ class InboxReconciler {
       required List<Account> accounts,
       required String profileName,
       List<RecurringPayment> recurring = const [],
+      List<OpenReceivable> receivables = const [],
       InboxWriter? writer,
       Future<void> Function()? push,
       Duration every = const Duration(minutes: 10)}) async {
@@ -183,6 +190,7 @@ class InboxReconciler {
           accounts: accounts,
           profileName: profileName,
           recurring: recurring,
+          receivables: receivables,
           writer: writer);
       await push?.call();
       return state;
@@ -318,6 +326,7 @@ class InboxReconciler {
     List<Account> accounts = const [],
     String profileName = '',
     List<RecurringPayment> recurring = const [],
+    List<OpenReceivable> receivables = const [],
     InboxWriter? writer,
     DateTime? now,
   }) async {
@@ -357,6 +366,7 @@ class InboxReconciler {
         ],
         rules: _rules(rules),
         recurring: recurringDue(recurring),
+        receivables: receivables,
         now: now,
         learnedCategory: (m) {
           final type = m.outgoing ? 'expense' : 'income';
@@ -386,7 +396,11 @@ class InboxReconciler {
       }
       final creates = switch (m.resolution) {
         Resolution.yieldIncome => yieldsIncome,
-        Resolution.ownTransfer || Resolution.rule || Resolution.iof => true,
+        Resolution.ownTransfer ||
+        Resolution.rule ||
+        Resolution.iof ||
+        Resolution.receivable =>
+          true,
         _ => false,
       };
       if (creates && (!canCreate || writer == null)) {
@@ -400,6 +414,7 @@ class InboxReconciler {
         switch (m.resolution) {
           case Resolution.linked:
             await DBHelper.confirmSuggestion(db, mv.id, m.transaction!.id);
+            await learnPixName(mv.id, m.transaction!.id);
           case Resolution.yieldIncome when yieldsIncome:
             final account = mv.nexoAccountId;
             if (account == null) {
@@ -442,6 +457,8 @@ class InboxReconciler {
                   description: mv.description,
                   note: 'Lançado pela regra de importação');
             }
+          case Resolution.receivable:
+            createdId = await writer!.receive(mv, m.receivableId!);
           default:
             // reversal, reserve, internal: nothing to register.
             await NotificationInbox.ignore(mv.id);
@@ -484,6 +501,11 @@ class InboxReconciler {
             fromAccountId: m.fromAccountId,
             toAccountId: m.toAccountId,
             ruleId: m.ruleId),
+        // The person confirms the receipt; without a known account it is a
+        // new entry like any other.
+        Resolution.receivable when m.movement.nexoAccountId != null => Match(
+            m.movement, Resolution.receivable,
+            receivableId: m.receivableId),
         _ => Match(m.movement, Resolution.newEntry, categoryId: m.categoryId),
       };
 
@@ -508,9 +530,47 @@ class InboxReconciler {
               counterparty: m.counterparty);
 
   /// "It is the same": the movement is the existing entry.
-  static Future<void> link(String suggestionId, String transactionId) async =>
-      DBHelper.confirmSuggestion(
-          await DBHelper.database, suggestionId, transactionId);
+  static Future<void> link(String suggestionId, String transactionId) async {
+    await DBHelper.confirmSuggestion(
+        await DBHelper.database, suggestionId, transactionId);
+    await learnPixName(suggestionId, transactionId);
+  }
+
+  /// A receipt typed by hand ("Recebido de…") tied to the bank's Pix: the
+  /// name the bank showed is kept on the person (when it has name and
+  /// surname and nothing was learned yet), so their next Pix settles their
+  /// part even if the Nexo only knows a first name.
+  static Future<void> learnPixName(
+      String suggestionId, String transactionId) async {
+    const prefix = 'lended-received:';
+    if (!transactionId.startsWith(prefix)) return;
+    final db = await DBHelper.database;
+    final rows = await db.query('notification_suggestions',
+        columns: ['counterparty', 'description'],
+        where: 'id = ?',
+        whereArgs: [suggestionId]);
+    if (rows.isEmpty) return;
+    final counterparty = (rows.single['counterparty'] as String? ?? '').trim();
+    final shown = counterparty.isNotEmpty
+        ? counterparty
+        : (rows.single['description'] as String? ?? '').trim();
+    if (normalizeMerchant(shown).split(' ').length < 2) return;
+    try {
+      await ledgerTransaction(db, 'lended.pix_name', (txn) async {
+        final lended = await txn.query('lended_money',
+            columns: ['person_id'],
+            where: 'id = ?',
+            whereArgs: [transactionId.substring(prefix.length)]);
+        if (lended.isEmpty) return;
+        await txn.update('lended_people', {'pix_name': shown},
+            where: "id = ? AND COALESCE(pix_name, '') = ''",
+            whereArgs: [lended.single['person_id']]);
+      });
+    } catch (e) {
+      // Only a convenience: the link itself is already saved.
+      Diagnostics.note('inbox', e);
+    }
+  }
 
   /// "They are different": never pair them again.
   static Future<void> dismissPair(String suggestionId, String transactionId) =>

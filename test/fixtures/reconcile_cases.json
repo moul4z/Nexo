@@ -608,6 +608,119 @@
       "expect": {
         "new": {"resolution": "newEntry", "automatic": false}
       }
+    },
+    {
+      "name": "P1 Pix de quem deve a parte da assinatura: quita sozinho, não é renda",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "receivable", "automatic": true, "receivableId": "shared:stream:0"}
+      }
+    },
+    {
+      "name": "P2 só o primeiro nome cadastrado: casa com qualquer xará, então não quita",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "P3 o nome que o Pix mostrou antes, guardado na pessoa, quita mesmo com só o primeiro nome",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna", "BRUNA EXEMPLO SILVA"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "receivable", "automatic": true, "receivableId": "shared:stream:0"}
+      }
+    },
+    {
+      "name": "P4 duas pessoas com o mesmo nome e o mesmo valor: a pessoa decide",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"},
+        {"id": "shared:stream:1", "personId": "outra-bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "P5 valor diferente da parte: não quita",
+      "movements": [
+        {"id": "m", "cents": 1000, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "P6 mais de 40 dias depois da conta: não quita",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-16T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-10-06"}
+      ],
+      "expect": {
+        "m": {"resolution": "newEntry", "automatic": false}
+      }
+    },
+    {
+      "name": "P7 banco sem conta do Nexo: é a parte, mas a pessoa confirma",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "receivable", "automatic": false, "receivableId": "shared:stream:0"}
+      }
+    },
+    {
+      "name": "P8 duas partes da mesma pessoa com o mesmo valor: a mais antiga primeiro",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream-nov:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"},
+        {"id": "shared:stream-out:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-10-05"}
+      ],
+      "expect": {
+        "m": {"resolution": "receivable", "automatic": true, "receivableId": "shared:stream-out:0"}
+      }
+    },
+    {
+      "name": "P9 recebimento já lançado à mão no mesmo dia: liga ao lançamento, não recebe duas vezes",
+      "movements": [
+        {"id": "m", "cents": 931, "direction": "in", "description": "Pix recebido", "counterparty": "BRUNA EXEMPLO SILVA", "at": "2026-11-10T10:00:00", "accountId": "nu-bank", "nexoAccountId": "bank"}
+      ],
+      "receivables": [
+        {"id": "shared:stream:0", "personId": "bruna", "names": ["Bruna Exemplo"], "cents": 931, "day": "2026-11-05"}
+      ],
+      "entries": [
+        {"id": "lended-received:shared:stream:0", "type": "income", "cents": 931, "description": "Recebido de Bruna Exemplo", "accountId": "bank", "day": "2026-11-10", "source": "lended_received:shared:stream:0"}
+      ],
+      "expect": {
+        "m": {"resolution": "linked", "automatic": true, "transactionId": "lended-received:shared:stream:0"}
+      }
     }
   ]
 }

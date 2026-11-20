@@ -98,6 +98,16 @@ void main() {
                   amountCents: r['cents'] as int,
                   date: DateTime.parse(r['day'] as String))
           ],
+          receivables: [
+            for (final r in (c['receivables'] as List? ?? const [])
+                .cast<Map<String, dynamic>>())
+              OpenReceivable(
+                  id: r['id'] as String,
+                  personId: r['personId'] as String,
+                  names: (r['names'] as List).cast<String>(),
+                  amountCents: r['cents'] as int,
+                  date: DateTime.parse(r['day'] as String))
+          ],
           now: at(fixture['now'] as String));
       final got = {
         for (final m in result)
@@ -116,6 +126,7 @@ void main() {
             if (m.ruleId != null) 'ruleId': m.ruleId!,
             if (m.withIof != null) 'withIof': m.withIof!.id,
             if (m.recurringId != null) 'recurringId': m.recurringId!,
+            if (m.receivableId != null) 'receivableId': m.receivableId!,
           }
       };
       expect(got, c['expect']);

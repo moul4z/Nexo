@@ -116,6 +116,8 @@ const appInternalWrites = <String, String>{
   'setting.seed':
       'copia para o acervo as configurações que o aparelho já tinha',
   'gold.refresh': 'recalcula contas em ouro pela cotação; nunca é decisão',
+  'lended.pix_name':
+      'guarda na pessoa o nome que o banco mostrou no Pix dela, ao ligar um recebimento a um movimento do banco',
   'investment.settle':
       'paga sozinho, no dia útil da liquidação, o caixa de uma compra ou venda que estava pendente',
   'investment.fx':

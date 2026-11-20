@@ -61,7 +61,43 @@ export interface Rule {
 
 export type Resolution =
   | "linked" | "maybe" | "internal" | "ownTransfer" | "ownName" | "invoicePayment"
-  | "reversal" | "reserve" | "yield" | "iof" | "rule" | "recurring" | "newEntry";
+  | "reversal" | "reserve" | "yield" | "iof" | "rule" | "recurring" | "receivable" | "newEntry";
+
+/// What someone owes the person and pays back by Pix (OpenReceivable in
+/// reconciliation.dart): the person's name and the name their Pix showed.
+export interface OpenReceivable {
+  id: string;
+  personId: string;
+  names: string[];
+  cents: number;
+  day: string; // YYYY-MM-DD
+}
+
+/// How long after the bill a Pix may still be someone paying their part.
+export const RECEIVABLE_DAYS = 40;
+
+/// Open parts a Pix may settle: lent, no account, not settled.
+export function openReceivables(lended: Record<string, unknown>[], people: Record<string, unknown>[]): OpenReceivable[] {
+  const byId = new Map(people.map((p) => [String(p.id), p]));
+  return lended
+    .filter((l) => (l.type ?? "lent") === "lent" && !Number(l.is_settled) && !l.account_id && byId.has(String(l.person_id)))
+    .map((l) => {
+      const p = byId.get(String(l.person_id))!;
+      return {
+        id: String(l.id), personId: String(l.person_id),
+        names: [String(p.name ?? ""), ...(p.pix_name ? [String(p.pix_name)] : [])],
+        cents: Math.round(Number(l.amount) * 100), day: String(l.date).slice(0, 10),
+      };
+    });
+}
+
+/// Whether [text] names one of [names]: name and surname, whole words.
+export function namesPerson(text: string, names: string[]): boolean {
+  const n = normalizeMerchant(text);
+  if (!n) return false;
+  return names.map(normalizeMerchant).some((name) =>
+    name.split(" ").length >= 2 && (` ${n} `.includes(` ${name} `) || textSimilarity(n, name) >= 0.99));
+}
 
 /// The next occurrence of a recurring payment: what the bank should show if
 /// it was paid (recurringDue in reconciliation.dart).
@@ -101,6 +137,8 @@ export interface Match {
   withIof?: string;
   /// For "recurring": the recurring payment it pays.
   recurringId?: string;
+  /// For "receivable": the "a receber" it settles.
+  receivableId?: string;
 }
 
 export interface Options {
@@ -115,6 +153,8 @@ export interface Options {
   rules?: Rule[];
   /// The open occurrence of each recurring payment.
   recurring?: RecurringDue[];
+  /// Parts people still owe (split bills).
+  receivables?: OpenReceivable[];
   learnedCategory?: (m: Movement) => string | null;
   now?: number;
 }
@@ -524,6 +564,23 @@ export function reconcile(movements: Movement[], entries: Entry[], options: Opti
     set(m, { resolution: "recurring", automatic: false, recurringId: r.id });
   }
 
+  // 6c. Someone paying back their part: money in, naming the person, the
+  // exact amount, up to 40 days after the bill; by itself only when a
+  // single person fits, the oldest of their parts first.
+  const paidBack = new Set<string>();
+  for (const m of rest) {
+    if (out.has(m.id) || isOut(m) || options_.some((o) => o.m.id === m.id && maybeTwin(o))) continue;
+    const fits = (options.receivables ?? []).filter((r) => {
+      const days = mday(m) - entryDay(r.day);
+      return !paidBack.has(r.id) && r.cents === m.amountCents && days >= 0 && days <= RECEIVABLE_DAYS &&
+        namesPerson(words(m), r.names);
+    });
+    if (!fits.length || new Set(fits.map((r) => r.personId)).size !== 1) continue;
+    fits.sort((a, b) => entryDay(a.day) - entryDay(b.day) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    paidBack.add(fits[0].id);
+    set(m, { resolution: "receivable", automatic: !!m.nexoAccountId, receivableId: fits[0].id });
+  }
+
   // 7. Rules the person marked "lançar sozinho". Never over a likely
   // duplicate: a close entry with the same amount makes it a question.
   for (const m of open()) {
@@ -599,5 +656,6 @@ export const resolutionLabel: Record<Resolution, string> = {
   iof: "IOF da compra internacional",
   rule: "Regra de importação",
   recurring: "Recorrente prevista",
+  receivable: "Parte de alguém paga de volta",
   newEntry: "Nova",
 };

@@ -619,12 +619,18 @@ class LendedPerson {
   String notes;
   DateTime createdAt;
 
+  /// The name as the bank showed it on a Pix this person sent, learned the
+  /// first time a receipt from them was tied to a bank movement. Lets a
+  /// later Pix settle their part even when [name] is only a first name.
+  String? pixName;
+
   LendedPerson({
     required this.id,
     required this.name,
     required this.colorValue,
     this.notes = '',
     DateTime? createdAt,
+    this.pixName,
   }) : createdAt = createdAt ?? DateTime.now();
 
   Map<String, dynamic> toMap() => {
@@ -633,6 +639,7 @@ class LendedPerson {
         'color_value': colorValue,
         'notes': notes,
         'created_at': createdAt.toIso8601String(),
+        'pix_name': pixName,
       };
 
   static LendedPerson fromMap(Map<String, dynamic> m) => LendedPerson(
@@ -643,6 +650,7 @@ class LendedPerson {
         createdAt: m['created_at'] != null
             ? DateTime.parse(m['created_at'] as String)
             : DateTime.now(),
+        pixName: m['pix_name'] as String?,
       );
 
   LendedPerson copyWith({String? name, int? colorValue, String? notes}) =>
@@ -652,6 +660,7 @@ class LendedPerson {
         colorValue: colorValue ?? this.colorValue,
         notes: notes ?? this.notes,
         createdAt: createdAt,
+        pixName: pixName,
       );
 }
 

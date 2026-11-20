@@ -4,7 +4,8 @@
 // itself is only described here, the app does it.
 import { cents, day, type Ledger, meta, metadataIndex, money, num, type Row, text } from "./finance.ts";
 import {
-  direction, type Entry, type Match, type Movement, paymentLegs, reconcile, type RecurringDue, resolutionLabel, type Rule,
+  direction, type Entry, type Match, type Movement, openReceivables, paymentLegs, reconcile, type RecurringDue,
+  resolutionLabel, type Rule,
 } from "./reconcile.ts";
 import { sharedSettings } from "./settings.ts";
 
@@ -99,6 +100,7 @@ export function classify(l: Ledger, pending: Raw[], decided: Raw[], now: number)
       .map((d) => ({ movement: movement(d), transactionId: String(d.transaction_id) })),
     rules: rules(l),
     recurring: recurringDue(l),
+    receivables: openReceivables(l.lended ?? [], l.lendedPeople ?? []),
     now,
   });
 }
@@ -143,6 +145,10 @@ function advice(m: Match, canWrite: boolean): string {
     case "recurring":
       return "É a ocorrência em aberto de uma recorrente (recurring): confirm_suggestion com recurring_id paga a recorrente " +
         "com o valor e o dia do banco. Não use pay_recurring nem confirme como lançamento solto: a recorrente ficaria em aberto.";
+    case "receivable":
+      return m.automatic
+        ? "Alguém pagou de volta a parte de uma conta dividida: o app registra o recebimento no celular (não é renda)."
+        : "Parece alguém pagando de volta a parte de uma conta dividida: confirme no app, em Para revisar (não é renda).";
     default:
       return "Novo: confirm_suggestion se for real, ignore_suggestions se não for.";
   }
@@ -155,6 +161,13 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
   const names = new Map(l.accounts.map((a) => [text(a.id), text(a.name)]));
   const categories = new Map(l.categories.map((c) => [text(c.id), text(c.name)]));
   const recurrings = new Map(l.recurring.map((r) => [text(r.id), r]));
+  const people = new Map((l.lendedPeople ?? []).map((p) => [text(p.id), text(p.name)]));
+  const receivable = (id: string) => {
+    const r = (l.lended ?? []).find((x) => text(x.id) === id);
+    return r
+      ? { id, person: people.get(text(r.person_id)), amount: money(cents(num(r.amount))), since: day(text(r.date)), notes: text(r.notes) || undefined }
+      : undefined;
+  };
   const match = new Map(matches.map((m) => [m.id, m]));
   const entry = (id?: string) => {
     const t = id ? byId.get(id) : undefined;
@@ -188,6 +201,7 @@ export function describe(l: Ledger, pending: Raw[], matches: Match[], limit: num
           expected_amount: money(cents(num(recurrings.get(m.recurringId)!.amount))),
         }
         : undefined,
+      receivable: m.receivableId ? receivable(m.receivableId) : undefined,
       what_to_do: advice(m, true),
     };
   };

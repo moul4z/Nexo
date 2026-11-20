@@ -20,6 +20,7 @@
 - **Orçamento por subcategoria:** um limite só para Delivery, por exemplo, que também conta no de Alimentação. Os totais não somam duas vezes. O Claude cria com `set_budget` e `subcategory`.
 - **Delivery ou Mercado pelo nome do estabelecimento:** ao confirmar um movimento do banco em Alimentação sem subcategoria, o campo já vem preenchido quando o nome deixa claro (iFood, Rappi, supermercado, atacadão…; Mercado Pago e Mercado Livre não contam). "Classificar antigos" no orçamento de Alimentação mostra quantos e quais antes de mudar.
 - **Assinatura dividida:** "Dividir com" na recorrente (despesa fixa). A cada pagamento, a sua parte fica como gasto e a de cada pessoa vira "a receber", na mesma gravação, em partes iguais (você fica com os centavos que sobram). Pagar duas vezes a mesma ocorrência não duplica nada. Parcelamento não se divide.
+- **Parte quitada pelo Pix:** um Pix recebido de quem deve uma parte (nome e sobrenome, ou o nome que o Pix dela mostrou antes), com o valor exato, em até 40 dias, é registrado como recebimento dessa parte (não é renda), no dia do banco. Sozinho só no aparelho que grava e quando uma única pessoa se encaixa; aparece em "Resolvidas automaticamente" e pode ser desfeito. Sem conta do Nexo ligada ao banco, vira a seção "A receber" em Para revisar. Um primeiro nome sozinho não basta (casaria com qualquer xará): o nome que o banco mostra é aprendido quando um recebimento lançado à mão é ligado ao Pix. Apagar um recebimento volta a parte para "a receber" (antes ela continuava quitada).
 ### Investir
 - **Liquidação na B3:** comprar ou vender ações, FIIs e ETFs em reais com conta vinculada cria o movimento de caixa como **pendente**, com vencimento no dia útil da liquidação (D+2, contando feriados). Pendente não mexe no saldo. No dia, ao abrir o app, ele vira pago sozinho e o saldo se move uma única vez, mesmo com dois aparelhos. A previsão de caixa já mostra o movimento no dia certo. Renda fixa, proventos e ativos no exterior continuam imediatos. Operação registrada depois da liquidação já entra paga.
 - **Conta do tipo Corretora:** nasce fora do saldo total (dá para mudar), entra no patrimônio e aparece em Investir como "Caixa na corretora". Investir também mostra o que está aguardando liquidação.
@@ -31,6 +32,7 @@
 ### Conector
 - `record_investment_event`: desdobramento, grupamento ou bonificação (exige esta versão do app).
 - `add_recurring` e `update_recurring` aceitam `split_with` (pessoas com quem a assinatura é dividida); `get_recurring` mostra quem divide (exige esta versão do app).
+- `list_suggestions` reconhece a parte paga de volta pelo Pix (`receivable`, com a pessoa e o valor), pela mesma regra do app (casos P1–P9 em `reconcile_cases.json`).
 - `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
 - `update_investment`: corrige nome, código e corretora de um ativo. `add_account` aceita o tipo `broker` (Corretora).
 - `simulate_cash` (só leitura): a mesma simulação da tela Simular. `update_account` aceita `interest_monthly_percent` (exige esta versão do app).

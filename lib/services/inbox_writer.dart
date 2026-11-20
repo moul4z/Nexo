@@ -110,4 +110,14 @@ class AppInboxWriter implements InboxWriter {
   @override
   Future<void> deleteEntry(String transactionId) =>
       app.deleteTransaction(transactionId);
+
+  @override
+  Future<String> receive(PendingMovement m, String receivableId) async {
+    final l = app.lended.where((x) => x.id == receivableId).firstOrNull ??
+        (throw StateError('O valor a receber não existe mais.'));
+    final account = m.nexoAccountId ??
+        (throw ArgumentError('Sem conta do Nexo para este banco.'));
+    return app.receiveLended(l, account,
+        on: m.occurredAt, suggestionId: m.id, cents: m.amountCents);
+  }
 }

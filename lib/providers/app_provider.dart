@@ -1336,6 +1336,7 @@ class AppProvider extends ChangeNotifier {
             .map((r) => r['transaction_id'] as String)
             .toList()
         : [id];
+    final reopens = meta.source.startsWith('lended_received:');
     await ledgerTransaction(db, 'transaction.delete', (txn) async {
       for (final txId in ids) {
         final rows =
@@ -1352,12 +1353,19 @@ class AppProvider extends ChangeNotifier {
               'UPDATE accounts SET balance = balance + ? WHERE id = ?',
               [_txDelta(t, reverse: true), t.accountId]);
         }
+        // A receipt taken back: the part is owed again.
+        if (m.source.startsWith('lended_received:')) {
+          await txn.update('lended_money', {'is_settled': 0},
+              where: 'id = ?',
+              whereArgs: [m.source.substring('lended_received:'.length)]);
+        }
         await txn.delete('card_invoice_payments',
             where: 'id = ?', whereArgs: [txId]);
         await txn.delete('transactions', where: 'id = ?', whereArgs: [txId]);
       }
     });
     await _reloadLedger();
+    if (reopens) await _reloadLended();
   }
 
   // ── Batch changes (assistant and, later, multi-select screens) ─────────
@@ -2254,26 +2262,36 @@ class AppProvider extends ChangeNotifier {
   }
 
   /// [l] was repaid into [accountId]: the money comes in as neutral, since
-  /// what it pays back never counted as this person's spending.
-  Future<void> receiveLended(LendedMoney l, String accountId) async {
+  /// what it pays back never counted as this person's spending. From the
+  /// bank ([suggestionId]): on the bank's day, tied to that movement in the
+  /// same write, and only for the exact amount still owed ([cents]).
+  Future<String> receiveLended(LendedMoney l, String accountId,
+      {DateTime? on, String? suggestionId, int? cents}) async {
     final account = accountById(accountId);
     if (account == null || account.type == 'credit' || account.isGold) {
       throw StateError('Selecione uma conta válida.');
     }
     final db = await DBHelper.database;
+    final id = 'lended-received:${l.id}';
     await ledgerTransaction(db, 'lended.receive', (txn) async {
       final rows =
           await txn.query('lended_money', where: 'id = ?', whereArgs: [l.id]);
       if (rows.isEmpty) throw StateError('O registro não existe mais.');
       final entry = LendedMoney.fromMap(rows.single);
-      if (entry.isSettled) return;
+      // From the bank, a part already received is not received twice.
+      if (entry.isSettled) {
+        if (suggestionId != null) throw StateError('Já foi recebido.');
+        return;
+      }
       if (entry.type != 'lent' || entry.accountId != null) {
         throw StateError('Este registro volta para a própria conta: quite-o.');
+      }
+      if (cents != null && cents != (entry.amount * 100).round()) {
+        throw StateError('O valor do banco não é o que falta receber.');
       }
       final people = await txn
           .query('lended_people', where: 'id = ?', whereArgs: [entry.personId]);
       final name = people.isEmpty ? '' : ' de ${people.first['name']}';
-      final id = 'lended-received:${entry.id}';
       await txn.insert(
           'transactions',
           AppTransaction(
@@ -2283,7 +2301,7 @@ class AppProvider extends ChangeNotifier {
                   description: 'Recebido$name',
                   accountId: accountId,
                   categoryId: '',
-                  date: DateTime.now(),
+                  date: on?.toLocal() ?? DateTime.now(),
                   note: entry.notes,
                   currency: account.currency)
               .toMap());
@@ -2299,10 +2317,14 @@ class AppProvider extends ChangeNotifier {
           [entry.amount, accountId]);
       await txn.update('lended_money', {'is_settled': 1},
           where: 'id = ?', whereArgs: [entry.id]);
+      if (suggestionId != null) {
+        await DBHelper.confirmSuggestion(txn, suggestionId, id);
+      }
     });
     await _reloadLedger();
     await _reloadLended();
     await _lendedNotif.cancelLendedReminder(l.id);
+    return id;
   }
 
   Future<void> settleLended(LendedMoney l) async {

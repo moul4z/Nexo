@@ -15,6 +15,7 @@ import '../services/bank_notices.dart';
 import '../services/notification_inbox.dart';
 import '../services/platform_capabilities.dart';
 import '../services/pluggy_inbox.dart';
+import '../services/reconciliation.dart';
 import 'assistant_commands.dart';
 import 'claude_queue.dart';
 import 'ledger_sync.dart';
@@ -87,6 +88,7 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
         accounts: provider.accounts,
         profileName: provider.settings.userName,
         recurring: provider.recurring,
+        receivables: openReceivables(provider.lended, provider.lendedPeople),
         writer: AppInboxWriter(provider),
         push: () async => pluggy?.pushNow(),
         every: headless ? Duration.zero : const Duration(minutes: 10));

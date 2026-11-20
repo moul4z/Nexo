@@ -147,6 +147,10 @@ enum Resolution {
   /// day, instead of a loose entry that leaves the recurring open.
   recurring,
 
+  /// Someone paying back their part ("a receber"): registered as that
+  /// receipt, never as income.
+  receivable,
+
   /// Nothing similar in the Nexo: probably not registered yet.
   newEntry,
 }
@@ -164,7 +168,8 @@ class Match {
       this.waiting = false,
       this.ruleId,
       this.withIof,
-      this.recurringId});
+      this.recurringId,
+      this.receivableId});
   final PendingMovement movement;
   final Resolution resolution;
 
@@ -198,6 +203,68 @@ class Match {
 
   /// For [Resolution.recurring]: the recurring payment it pays.
   final String? recurringId;
+
+  /// For [Resolution.receivable]: the "a receber" it settles.
+  final String? receivableId;
+}
+
+/// What someone owes this person and is paid back by Pix (a split bill),
+/// as the reconciliation reads it.
+class OpenReceivable {
+  const OpenReceivable(
+      {required this.id,
+      required this.personId,
+      required this.names,
+      required this.amountCents,
+      required this.date});
+  final String id, personId;
+
+  /// The person's name and the name the bank showed on an earlier Pix.
+  final List<String> names;
+  final int amountCents;
+  final DateTime date;
+}
+
+/// How long after the bill a Pix may still be someone paying their part.
+const receivableDays = 40;
+
+/// The parts still owed that a Pix may settle: lent with no account (the
+/// money left with a bill), not settled yet.
+List<OpenReceivable> openReceivables(
+    List<LendedMoney> lended, List<LendedPerson> people) {
+  final byId = {for (final p in people) p.id: p};
+  return [
+    for (final l in lended)
+      if (l.type == 'lent' &&
+          !l.isSettled &&
+          l.accountId == null &&
+          byId[l.personId] != null)
+        OpenReceivable(
+            id: l.id,
+            personId: l.personId,
+            names: [
+              byId[l.personId]!.name,
+              if ((byId[l.personId]!.pixName ?? '').isNotEmpty)
+                byId[l.personId]!.pixName!
+            ],
+            amountCents: _cents(l.amount),
+            date: l.date)
+  ];
+}
+
+/// Whether [text] (a bank description or counterparty) names one of
+/// [names]: name and surname at least, whole words, as the owner's rule.
+bool namesPerson(String text, List<String> names) {
+  final n = normalizeMerchant(text);
+  if (n.isEmpty) return false;
+  for (final raw in names) {
+    final name = normalizeMerchant(raw);
+    if (name.split(' ').length < 2) continue;
+    if (' $n '.contains(' $name ') || textSimilarity(n, name) >= .99) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// The next occurrence of a recurring payment, as the reconciliation reads
@@ -408,6 +475,7 @@ List<Match> reconcile({
   List<(PendingMovement, String)> settled = const [],
   List<ReconcileRule> rules = const [],
   List<RecurringDue> recurring = const [],
+  List<OpenReceivable> receivables = const [],
   DateTime? now,
 }) {
   final out = <String, Match>{};
@@ -436,7 +504,8 @@ List<Match> reconcile({
           bool waiting = false,
           String? ruleId,
           PendingMovement? withIof,
-          String? recurringId}) =>
+          String? recurringId,
+          String? receivableId}) =>
       out[m.id] = Match(m, r,
           automatic: automatic,
           transaction: transaction,
@@ -449,7 +518,8 @@ List<Match> reconcile({
           waiting: waiting,
           ruleId: ruleId,
           withIof: withIof,
-          recurringId: recurringId);
+          recurringId: recurringId,
+          receivableId: receivableId);
   bool mentionsOwner(PendingMovement m) {
     if (m.sameOwner == true) return true;
     final n = normalizeMerchant(m.words);
@@ -978,6 +1048,39 @@ List<Match> reconcile({
     if (out.containsKey(m.id) || paidNow.contains(r.id)) continue;
     paidNow.add(r.id);
     set(m, Resolution.recurring, recurringId: r.id);
+  }
+
+  // 6c. Someone paying back their part ("a receber"): money in, naming the
+  // person (name and surname, or the name their Pix showed before), the
+  // exact amount, up to 40 days after the bill. Never over an entry that
+  // may be the same; by itself only when a single person fits, and the
+  // oldest of their parts with that amount goes first.
+  final paidBack = <String>{};
+  for (final m in rest) {
+    if (out.containsKey(m.id) ||
+        isOut(m) ||
+        options.any((o) => o.m.id == m.id && maybeTwin(o))) {
+      continue;
+    }
+    final fits = [
+      for (final r in receivables)
+        if (!paidBack.contains(r.id) &&
+            r.amountCents == m.amountCents &&
+            mday(m) - entryDay(r.date) >= 0 &&
+            mday(m) - entryDay(r.date) <= receivableDays &&
+            namesPerson(m.words, r.names))
+          r
+    ];
+    if (fits.isEmpty || fits.map((r) => r.personId).toSet().length != 1) {
+      continue;
+    }
+    fits.sort((a, b) {
+      final c = entryDay(a.date) - entryDay(b.date);
+      return c == 0 ? a.id.compareTo(b.id) : c;
+    });
+    paidBack.add(fits.first.id);
+    set(m, Resolution.receivable,
+        automatic: m.nexoAccountId != null, receivableId: fits.first.id);
   }
 
   // 7. Rules the person marked "lançar sozinho". Never over a likely

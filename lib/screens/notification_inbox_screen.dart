@@ -203,6 +203,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
           accounts: app.accounts,
           profileName: app.settings.userName,
           recurring: app.recurring,
+          receivables: openReceivables(app.lended, app.lendedPeople),
           writer: _writer(here: createHere));
       // What the app settled leaves the assistant's queue too.
       unawaited(PluggyInbox.instance?.pushNow());
@@ -259,6 +260,17 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
   /// The bank movement is the open occurrence of [r]: the recurring is paid
   /// with the bank's amount and day. A different amount (the subscription
   /// went up) is offered as the new value, never applied alone.
+  /// "Recebido": the part someone owed comes in as that receipt (neutral,
+  /// never income), on the bank's day, tied to the movement.
+  Future<void> _receive(Match m, LendedMoney l) {
+    final app = context.read<AppProvider>();
+    final mv = m.movement;
+    return _act(
+        () => app.receiveLended(l, mv.nexoAccountId!,
+            on: mv.occurredAt, suggestionId: mv.id, cents: mv.amountCents),
+        'Recebimento registrado; não conta como renda.');
+  }
+
   Future<void> _payRecurring(Match m, RecurringPayment r) async {
     final app = context.read<AppProvider>();
     final mv = m.movement;
@@ -510,10 +522,27 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
       for (final m in matches)
         if (recurringOf.containsKey(m.movement.id)) m
     ];
+    // A part already received (or gone) is just a new movement.
+    final receivableOf = {
+      for (final m in matches)
+        if (m.resolution == Resolution.receivable &&
+            m.movement.nexoAccountId != null)
+          if (app.lended
+                  .where((l) => l.id == m.receivableId && !l.isSettled)
+                  .firstOrNull
+              case final l?)
+            m.movement.id: l
+    };
+    final receipts = [
+      for (final m in matches)
+        if (receivableOf.containsKey(m.movement.id)) m
+    ];
     final fresh = matches
         .where((m) =>
             (m.resolution == Resolution.recurring &&
                 !recurringOf.containsKey(m.movement.id)) ||
+            (m.resolution == Resolution.receivable &&
+                !receivableOf.containsKey(m.movement.id)) ||
             m.resolution == Resolution.newEntry ||
             m.resolution == Resolution.rule ||
             m.resolution == Resolution.yieldIncome)
@@ -530,6 +559,7 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
         ownSingles.length +
         iofAlone.length +
         bills.length +
+        receipts.length +
         fresh.length;
     final resolved = state?.resolved ?? const <AutoResolved>[];
     final deferred = state?.deferred ?? const <Match>[];
@@ -987,6 +1017,37 @@ class _NotificationInboxScreenState extends State<NotificationInboxScreen>
                                         undo: () =>
                                             _undoIgnore([m.movement.id])),
                                     child: const Text('Ignorar')),
+                              ]));
+                    }),
+                ],
+                if (receipts.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const NexoSectionTitle('A receber',
+                      subtitle:
+                          'Alguém pagou de volta a parte de uma conta dividida: não é renda',
+                      icon: Icons.group_outlined),
+                  const SizedBox(height: 8),
+                  for (final m in receipts)
+                    Builder(builder: (context) {
+                      final l = receivableOf[m.movement.id]!;
+                      final who = app.lendedPeople
+                              .where((p) => p.id == l.personId)
+                              .firstOrNull
+                              ?.name ??
+                          'Alguém';
+                      return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: movementCard(m,
+                              hint: Text(
+                                  'É a parte de $who${l.notes.isEmpty ? '' : ' (${l.notes})'}, desde ${DateFormat('dd/MM').format(l.date)}.',
+                                  style: small),
+                              extra: [
+                                FilledButton(
+                                    onPressed: () => _receive(m, l),
+                                    child: const Text('Recebido')),
+                                TextButton(
+                                    onPressed: () => _review(_row(m)),
+                                    child: const Text('Lançar separado')),
                               ]));
                     }),
                 ],
