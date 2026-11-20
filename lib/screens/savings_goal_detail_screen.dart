@@ -31,6 +31,8 @@ class SavingsGoalDetailScreen extends StatelessWidget {
 
     final progress = app.goalProgress(currentGoal);
     final color = Color(currentGoal.colorValue);
+    String money(double v) =>
+        formatShown(v, currentGoal.currency, app.settings.hideBalance);
 
     return Scaffold(
       appBar: AppBar(
@@ -82,9 +84,7 @@ class SavingsGoalDetailScreen extends StatelessWidget {
                         Text(l10n.savings_savedSoFar,
                             style: TextStyle(
                                 fontSize: 12, fontWeight: FontWeight.w500)),
-                        Text(
-                            formatAmount(currentGoal.currentAmount,
-                                currentGoal.currency),
+                        Text(money(currentGoal.currentAmount),
                             style: TextStyle(
                                 fontFeatures: NexoTones.figures,
                                 fontSize: 28,
@@ -98,9 +98,7 @@ class SavingsGoalDetailScreen extends StatelessWidget {
                         Text(l10n.savings_target,
                             style: TextStyle(
                                 fontSize: 12, fontWeight: FontWeight.w500)),
-                        Text(
-                            formatAmount(
-                                currentGoal.targetAmount, currentGoal.currency),
+                        Text(money(currentGoal.targetAmount),
                             style: TextStyle(
                                 fontFeatures: NexoTones.figures,
                                 fontSize: 20,
@@ -129,7 +127,7 @@ class SavingsGoalDetailScreen extends StatelessWidget {
                     if (currentGoal.targetDate != null &&
                         currentGoal.currentAmount < currentGoal.targetAmount)
                       Text(
-                          'Recomendado por mês: ${formatAmount((currentGoal.targetAmount - currentGoal.currentAmount) / ((currentGoal.targetDate!.difference(DateTime.now()).inDays / 30).ceil().clamp(1, 1200)), currentGoal.currency)}'),
+                          'Recomendado por mês: ${money((currentGoal.targetAmount - currentGoal.currentAmount) / ((currentGoal.targetDate!.difference(DateTime.now()).inDays / 30).ceil().clamp(1, 1200)))}'),
                     Text(
                         '${(progress * 100).toStringAsFixed(1).replaceAll('.', ',')}%',
                         style: TextStyle(
@@ -216,7 +214,7 @@ class SavingsGoalDetailScreen extends StatelessWidget {
                               fontSize: 12,
                               color: cs.onSurface.withValues(alpha: 0.6))),
                       trailing: Text(
-                        '${isContrib ? '+' : '-'}${formatAmount(c.amount, currentGoal.currency)}',
+                        '${isContrib ? '+' : '-'}${money(c.amount)}',
                         style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,

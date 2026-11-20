@@ -178,6 +178,7 @@ class _CategorySheetState extends State<_CategorySheet> {
   // because reconstructing IconData at runtime breaks release tree-shaking.
   int _iconIndex = 1;
   bool _submitted = false;
+  bool _saving = false;
 
   bool get isEdit => widget.existing != null;
 
@@ -213,25 +214,28 @@ class _CategorySheetState extends State<_CategorySheet> {
     setState(() => _submitted = true);
     if (_nameCtrl.text.trim().isEmpty) return;
     final app = context.read<AppProvider>();
-    if (isEdit) {
-      await app.updateCategory(widget.existing!.copyWith(
-        name: _nameCtrl.text.trim(),
-        colorValue: _color,
-        iconCodePoint: _iconIndex, // 1-based index stored as iconCodePoint
-        envelope: _type == 'expense' ? _envelope : null,
-        clearEnvelope: _type != 'expense' || _envelope == null,
-      ));
-    } else {
-      await app.addCategory(AppCategory(
-        id: app.newId(),
-        name: _nameCtrl.text.trim(),
-        type: _type,
-        colorValue: _color,
-        iconCodePoint: _iconIndex,
-        envelope: _type == 'expense' ? _envelope : null,
-      ));
-    }
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this, () => _saving, (v) => setState(() => _saving = v), () async {
+      if (isEdit) {
+        await app.updateCategory(widget.existing!.copyWith(
+          name: _nameCtrl.text.trim(),
+          colorValue: _color,
+          iconCodePoint: _iconIndex, // 1-based index stored as iconCodePoint
+          envelope: _type == 'expense' ? _envelope : null,
+          clearEnvelope: _type != 'expense' || _envelope == null,
+        ));
+      } else {
+        await app.addCategory(AppCategory(
+          id: app.newId(),
+          name: _nameCtrl.text.trim(),
+          type: _type,
+          colorValue: _color,
+          iconCodePoint: _iconIndex,
+          envelope: _type == 'expense' ? _envelope : null,
+        ));
+      }
+    });
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -484,10 +488,12 @@ class _CategorySheetState extends State<_CategorySheet> {
 
               const SizedBox(height: 20),
               FilledButton(
-                onPressed: () {
-                  AppHaptics.tap(context, HapticStrength.light);
-                  _submit();
-                },
+                onPressed: _saving
+                    ? null
+                    : () {
+                        AppHaptics.tap(context, HapticStrength.light);
+                        _submit();
+                      },
                 style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(50),
                     shape: RoundedRectangleBorder(

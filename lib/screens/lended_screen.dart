@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
+import '../utils/snackbar.dart';
 import '../models/models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
@@ -39,7 +40,8 @@ class LendedScreen extends StatelessWidget {
     final l10n = AppLocalizations.of(context)!;
     final app = context.watch<AppProvider>();
     final cs = Theme.of(context).colorScheme;
-    String fmt(double v) => formatAmount(v, app.settings.currency);
+    String fmt(double v) =>
+        formatShown(v, app.settings.currency, app.settings.hideBalance);
 
     // Net balances across all people (mirrors the old flat-list totals).
     double theyOwe = 0, iOwe = 0;
@@ -254,6 +256,7 @@ class _PersonSheetState extends State<_PersonSheet> {
   final _notesCtrl = TextEditingController();
   int _color = kLendedPersonColors.first;
   bool _submitted = false;
+  bool _saving = false;
 
   bool get isEdit => widget.existing != null;
 
@@ -281,21 +284,24 @@ class _PersonSheetState extends State<_PersonSheet> {
     if (name.isEmpty) return;
     final app = context.read<AppProvider>();
 
-    if (isEdit) {
-      await app.updateLendedPerson(widget.existing!.copyWith(
-        name: name,
-        colorValue: _color,
-        notes: _notesCtrl.text.trim(),
-      ));
-    } else {
-      await app.addLendedPerson(LendedPerson(
-        id: app.newId(),
-        name: name,
-        colorValue: _color,
-        notes: _notesCtrl.text.trim(),
-      ));
-    }
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this, () => _saving, (v) => setState(() => _saving = v), () async {
+      if (isEdit) {
+        await app.updateLendedPerson(widget.existing!.copyWith(
+          name: name,
+          colorValue: _color,
+          notes: _notesCtrl.text.trim(),
+        ));
+      } else {
+        await app.addLendedPerson(LendedPerson(
+          id: app.newId(),
+          name: name,
+          colorValue: _color,
+          notes: _notesCtrl.text.trim(),
+        ));
+      }
+    });
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -366,10 +372,12 @@ class _PersonSheetState extends State<_PersonSheet> {
                   prefixIcon: const Icon(Icons.sticky_note_2_outlined))),
           const SizedBox(height: 20),
           FilledButton(
-            onPressed: () {
-              AppHaptics.tap(context, HapticStrength.light);
-              _submit();
-            },
+            onPressed: _saving
+                ? null
+                : () {
+                    AppHaptics.tap(context, HapticStrength.light);
+                    _submit();
+                  },
             style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(50),
                 shape: RoundedRectangleBorder(

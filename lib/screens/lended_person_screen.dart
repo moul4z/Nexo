@@ -29,7 +29,8 @@ class LendedPersonScreen extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     // Re-resolve in case the person was edited since this screen was pushed.
     final current = app.personById(person.id) ?? person;
-    String fmt(double v) => formatAmount(v, app.settings.currency);
+    String fmt(double v) =>
+        formatShown(v, app.settings.currency, app.settings.hideBalance);
 
     final entries = app.lendedFor(current.id);
     final active = entries.where((l) => !l.isSettled).toList();
@@ -206,6 +207,7 @@ class _EditPersonInlineSheetState extends State<_EditPersonInlineSheet> {
   late final _notesCtrl = TextEditingController(text: widget.person.notes);
   late int _color = widget.person.colorValue;
   bool _submitted = false;
+  bool _saving = false;
 
   @override
   void dispose() {
@@ -219,12 +221,16 @@ class _EditPersonInlineSheetState extends State<_EditPersonInlineSheet> {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) return;
     final app = context.read<AppProvider>();
-    await app.updateLendedPerson(widget.person.copyWith(
-      name: name,
-      colorValue: _color,
-      notes: _notesCtrl.text.trim(),
-    ));
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this,
+        () => _saving,
+        (v) => setState(() => _saving = v),
+        () => app.updateLendedPerson(widget.person.copyWith(
+              name: name,
+              colorValue: _color,
+              notes: _notesCtrl.text.trim(),
+            )));
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -294,10 +300,12 @@ class _EditPersonInlineSheetState extends State<_EditPersonInlineSheet> {
                   prefixIcon: const Icon(Icons.sticky_note_2_outlined))),
           const SizedBox(height: 20),
           FilledButton(
-            onPressed: () {
-              AppHaptics.tap(context, HapticStrength.light);
-              _submit();
-            },
+            onPressed: _saving
+                ? null
+                : () {
+                    AppHaptics.tap(context, HapticStrength.light);
+                    _submit();
+                  },
             style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(50),
                 shape: RoundedRectangleBorder(
@@ -482,6 +490,7 @@ class _EntrySheetState extends State<_EntrySheet> {
   TimeOfDay _reminderTime = const TimeOfDay(hour: 9, minute: 0);
 
   bool _submitted = false;
+  bool _saving = false;
 
   bool get isEdit => widget.existing != null;
 
@@ -576,34 +585,37 @@ class _EntrySheetState extends State<_EntrySheet> {
 
     final effectiveReminder = _reminderEnabled && _dueDate != null;
 
-    if (isEdit) {
-      final updated = widget.existing!.copyWith(
-        amount: amount,
-        type: _type,
-        accountId: _accountId,
-        dueDate: _dueDate,
-        clearDueDate: _dueDate == null,
-        notes: _notesCtrl.text.trim(),
-        clearAccount: _accountId == null,
-        reminderEnabled: effectiveReminder,
-        reminderTime: _reminderTimeStr,
-      );
-      await app.updateLended(updated, widget.existing!);
-    } else {
-      await app.addLended(LendedMoney(
-        id: app.newId(),
-        personId: widget.person.id,
-        amount: amount,
-        type: _type,
-        accountId: _accountId,
-        date: DateTime.now(),
-        dueDate: _dueDate,
-        notes: _notesCtrl.text.trim(),
-        reminderEnabled: effectiveReminder,
-        reminderTime: _reminderTimeStr,
-      ));
-    }
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this, () => _saving, (v) => setState(() => _saving = v), () async {
+      if (isEdit) {
+        final updated = widget.existing!.copyWith(
+          amount: amount,
+          type: _type,
+          accountId: _accountId,
+          dueDate: _dueDate,
+          clearDueDate: _dueDate == null,
+          notes: _notesCtrl.text.trim(),
+          clearAccount: _accountId == null,
+          reminderEnabled: effectiveReminder,
+          reminderTime: _reminderTimeStr,
+        );
+        await app.updateLended(updated, widget.existing!);
+      } else {
+        await app.addLended(LendedMoney(
+          id: app.newId(),
+          personId: widget.person.id,
+          amount: amount,
+          type: _type,
+          accountId: _accountId,
+          date: DateTime.now(),
+          dueDate: _dueDate,
+          notes: _notesCtrl.text.trim(),
+          reminderEnabled: effectiveReminder,
+          reminderTime: _reminderTimeStr,
+        ));
+      }
+    });
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -824,10 +836,12 @@ class _EntrySheetState extends State<_EntrySheet> {
                   prefixIcon: const Icon(Icons.sticky_note_2_outlined))),
           const SizedBox(height: 20),
           FilledButton(
-            onPressed: () {
-              AppHaptics.tap(context, HapticStrength.light);
-              _submit();
-            },
+            onPressed: _saving
+                ? null
+                : () {
+                    AppHaptics.tap(context, HapticStrength.light);
+                    _submit();
+                  },
             style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(50),
                 shape: RoundedRectangleBorder(

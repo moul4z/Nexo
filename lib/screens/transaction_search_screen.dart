@@ -46,7 +46,9 @@ class _TransactionSearchScreenState extends State<TransactionSearchScreen> {
     String? error;
     await showDialog<void>(
         context: context,
-        builder: (ctx) => StatefulBuilder(builder: (ctx, update) {
+        builder: (ctx) => OwnsControllers(
+            controllers: [min, max],
+            child: StatefulBuilder(builder: (ctx, update) {
               Widget choice(
                       String label,
                       String? value,
@@ -182,9 +184,7 @@ class _TransactionSearchScreenState extends State<TransactionSearchScreen> {
                         },
                         child: const Text('Aplicar'))
                   ]);
-            }));
-    min.dispose();
-    max.dispose();
+            })));
     if (!applied) _filter = previous;
     if (mounted) setState(() {});
   }

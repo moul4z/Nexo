@@ -629,6 +629,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
   String _subcategory = '';
   String _period = 'monthly';
   bool _submitted = false;
+  bool _saving = false;
 
   bool get isEdit => widget.existing != null;
 
@@ -743,12 +744,12 @@ class _BudgetSheetState extends State<_BudgetSheet> {
               : DateTime.now(),
     );
 
-    if (isEdit) {
-      await app.updateBudget(b);
-    } else {
-      await app.addBudget(b);
-    }
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this,
+        () => _saving,
+        (v) => setState(() => _saving = v),
+        () => isEdit ? app.updateBudget(b) : app.addBudget(b));
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -1018,10 +1019,12 @@ class _BudgetSheetState extends State<_BudgetSheet> {
               const SizedBox(height: 12),
             ],
             FilledButton.icon(
-              onPressed: () {
-                AppHaptics.tap(context, HapticStrength.light);
-                _submit();
-              },
+              onPressed: _saving
+                  ? null
+                  : () {
+                      AppHaptics.tap(context, HapticStrength.light);
+                      _submit();
+                    },
               icon: Icon(isEdit ? Icons.save_outlined : Icons.add),
               label: Text(
                   isEdit ? l10n.budget_saveChanges : l10n.budget_setBudget),

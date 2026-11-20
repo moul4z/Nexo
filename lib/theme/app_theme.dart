@@ -550,3 +550,10 @@ String formatAmount(double amount, String code) {
   );
   return fmt.format(amount);
 }
+
+/// What "Ocultar saldo" shows in place of an amount, on every screen.
+const hiddenAmount = '••••';
+
+/// An amount, or [hiddenAmount] when the person chose to hide values.
+String formatShown(double amount, String code, bool hidden) =>
+    hidden ? hiddenAmount : formatAmount(amount, code);

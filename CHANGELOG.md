@@ -47,6 +47,19 @@
 - **Cópia automática diária:** ao abrir o app, uma vez por dia, o Nexo guarda uma cópia do banco no próprio aparelho (7 diárias e 4 semanais). Cada uma é conferida antes de ser guardada: abre, passa na verificação de integridade do SQLite e tem o mesmo número de lançamentos e contas. Backup › Cópias automáticas lista as cópias e salva uma onde você quiser.
 - **Testar um backup sem restaurar:** o arquivo é restaurado numa cópia à parte, que é apagada depois, e o app diz o que ele traria. Seus dados não mudam.
 - **Conferência interna dos saldos:** uma vez por dia, o app confere se o saldo guardado de cada conta mudou junto com os lançamentos. Se não mudou, registra em Ajuda › Diagnóstico e não corrige nada sozinho.
+### Sincronização e fila do Claude
+- O que a fila do Claude gravou sobe na mesma passada, sem esperar a próxima sincronização.
+- Sem internet, a tela diz "sem conexão" em vez de um erro genérico; o login também desiste depois do tempo limite.
+- Um pedido do Claude que gravou parte antes de falhar aparece como feito em parte, com o motivo e o desfazer (antes parecia não ter feito nada).
+- Com o app fechado, a passada respeita o tempo que o sistema dá: se falta pouco, deixa a leitura do banco e as cotações para a próxima.
+### Telas
+- **"Ocultar saldo" vale em todas as telas:** Patrimônio (inclusive o toque no gráfico), Bens, Empréstimos, Dinheiro emprestado, Objetivos, Lista de desejos e os saldos das contas em Transferir.
+- **Salvar uma vez só:** nos formulários de orçamento, bem, categoria, pessoa, dinheiro emprestado e desejo, o botão fica inativo enquanto grava (dois toques criavam dois registros), e uma gravação recusada diz o motivo.
+- Busca do Extrato por valor ("55,90", "R$ 1.200") e o botão de filtro mostra quantos filtros estão ativos.
+- Transferir mantém o valor ao trocar de conta e diz o motivo quando não conclui.
+- Backup: o erro fica na tela até você sair; o texto do Windows não diz mais que não há sincronização com o celular.
+- Um nome só para "Para revisar" no Mais.
+- Fechar o formulário de lançamento com algo digitado pergunta antes de descartar.
 
 ## [1.18.0] - 2026-11-18
 ### Conciliação com o Open Finance

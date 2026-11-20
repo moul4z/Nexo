@@ -51,6 +51,8 @@ class _LoanDetailScreenState extends State<LoanDetailScreen> {
     final remaining = app.loanRemaining(_loan);
     final progress = app.loanProgress(_loan);
     final cur = _loan.currency;
+    final hidden = app.settings.hideBalance;
+    String money(double v, String code) => formatShown(v, code, hidden);
 
     final df = DateFormat('dd/MM/yyyy');
 
@@ -154,7 +156,7 @@ class _LoanDetailScreenState extends State<LoanDetailScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      formatAmount(remaining, cur),
+                      money(remaining, cur),
                       style: TextStyle(
                         fontFeatures: NexoTones.figures,
                         fontSize: 24,
@@ -169,7 +171,7 @@ class _LoanDetailScreenState extends State<LoanDetailScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          '${l10n.loans_paid}: ${formatAmount(totalPaid, cur)}',
+                          '${l10n.loans_paid}: ${money(totalPaid, cur)}',
                           style: TextStyle(
                               fontSize: 12, fontWeight: FontWeight.w500),
                         ),
@@ -211,8 +213,8 @@ class _LoanDetailScreenState extends State<LoanDetailScreen> {
                     Row(
                       children: [
                         Expanded(
-                            child: _DetailStat('Principal',
-                                formatAmount(_loan.principal, cur))),
+                            child: _DetailStat(
+                                'Principal', money(_loan.principal, cur))),
                         Expanded(
                           child: _DetailStat(
                             'Juros ao ano',
@@ -234,7 +236,7 @@ class _LoanDetailScreenState extends State<LoanDetailScreen> {
                                     _loan.durationMonths))),
                         Expanded(
                             child: _DetailStat('Total a pagar',
-                                formatAmount(_loan.totalPayable, cur))),
+                                money(_loan.totalPayable, cur))),
                       ],
                     ),
                     if (_loan.accountId != null) ...[
@@ -383,7 +385,7 @@ class _LoanDetailScreenState extends State<LoanDetailScreen> {
                                   color: cs.primary, size: 18),
                             ),
                             title: Text(
-                              formatAmount(p.amount, p.currency),
+                              money(p.amount, p.currency),
                               style: TextStyle(
                                   fontFeatures: NexoTones.figures,
                                   fontWeight: FontWeight.w600,

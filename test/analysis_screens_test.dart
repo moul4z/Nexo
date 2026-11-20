@@ -361,6 +361,10 @@ void main() {
     expect(app.transactions, hasLength(24));
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
+    // Something was typed: Esc asks before discarding it (UX-11).
+    expect(find.text('Descartar o que foi digitado?'), findsOneWidget);
+    await tester.tap(find.text('Descartar'));
+    await tester.pumpAndSettle();
     expect(find.byType(AddTransactionScreen), findsNothing);
     expect(app.transactions, hasLength(24));
     expect(tester.takeException(), isNull);

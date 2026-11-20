@@ -24,7 +24,8 @@ class NetWorthScreen extends StatelessWidget {
     final otherParts = liveNetWorth - totalAccounts - totalAssets;
     final currency =
         context.select<AppProvider, String>((app) => app.settings.currency);
-    String fmt(double v) => formatAmount(v, currency);
+    final hidden = app.settings.hideBalance;
+    String fmt(double v) => formatShown(v, currency, hidden);
 
     final spots = <FlSpot>[];
     for (int i = 0; i < snapshots.length; i++) {
@@ -121,7 +122,8 @@ class NetWorthScreen extends StatelessWidget {
                         ),
                         borderData: FlBorderData(show: false),
                         titlesData: const FlTitlesData(show: false),
-                        lineTouchData: const LineTouchData(enabled: true),
+                        // The touch tooltip shows the raw number.
+                        lineTouchData: LineTouchData(enabled: !hidden),
                       ),
                     ),
                   ),

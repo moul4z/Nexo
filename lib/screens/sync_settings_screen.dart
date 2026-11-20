@@ -19,6 +19,7 @@ import '../sync/sync_controller.dart';
 import '../services/desktop_profile.dart';
 import 'package:intl/intl.dart';
 import '../theme/nexo_tokens.dart';
+import '../widgets/nexo_ui.dart' show OwnsControllers;
 
 /// Account, synchronization and remote laboratory. Real activation always
 /// goes through consent, a saved backup, a local rehearsal and a final
@@ -328,7 +329,9 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
     final id = TextEditingController(), name = TextEditingController();
     final ok = await showDialog<bool>(
         context: context,
-        builder: (dialog) => AlertDialog(
+        builder: (dialog) => OwnsControllers(
+            controllers: [id, name],
+            child: AlertDialog(
               title: const Text('Adicionar conexão do Meu Pluggy'),
               content: Column(mainAxisSize: MainAxisSize.min, children: [
                 const Text(
@@ -352,10 +355,9 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
                     onPressed: () => Navigator.pop(dialog, true),
                     child: const Text('Adicionar')),
               ],
-            ));
+            )));
+    // Read before the dialog's fields are released with it.
     final itemId = id.text.trim(), label = name.text.trim();
-    id.dispose();
-    name.dispose();
     if (ok != true || itemId.isEmpty) return;
     await _run(() async {
       try {
@@ -496,7 +498,9 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
             : 'Teste ${DesktopProfile.testName}');
     final label = await showDialog<String>(
         context: context,
-        builder: (dialog) => AlertDialog(
+        builder: (dialog) => OwnsControllers(
+            controllers: [name],
+            child: AlertDialog(
               title: const Text('Criar acervo de teste'),
               content: Column(mainAxisSize: MainAxisSize.min, children: [
                 const Text(
@@ -514,8 +518,7 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
                     onPressed: () => Navigator.pop(dialog, name.text.trim()),
                     child: const Text('Criar')),
               ],
-            ));
-    name.dispose();
+            )));
     if (label == null || label.isEmpty) return;
     await _run(() => SyncController.instance!.createDataset(label));
   }

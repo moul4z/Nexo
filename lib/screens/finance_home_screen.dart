@@ -53,8 +53,31 @@ class FinanceHomeScreen extends StatefulWidget {
   State<FinanceHomeScreen> createState() => _FinanceHomeScreenState();
 }
 
+/// Keeps a computed value while its inputs stay the same (UX-12): rebuilds
+/// that change nothing in the data (the keyboard, the payments read, the
+/// month bar) do not run the month analysis and the forecast again.
+class _Memo<T> {
+  List<Object?>? _key;
+  late T _value;
+
+  T of(List<Object?> key, T Function() compute) {
+    final old = _key;
+    if (old != null &&
+        old.length == key.length &&
+        Iterable.generate(key.length).every((i) => old[i] == key[i])) {
+      return _value;
+    }
+    _value = compute();
+    _key = key;
+    return _value;
+  }
+}
+
 class _FinanceHomeScreenState extends State<FinanceHomeScreen>
     with WidgetsBindingObserver {
+  final _monthMemo =
+      _Memo<(FinancialAnalysis, FinancialAnalysis, CardCommitment)>();
+  final _forecastMemo = _Memo<(CashForecast?, CashForecast?, CashTimeline?)>();
   Future<List<Map<String, dynamic>>>? _payments;
   List<AppTransaction>? _lastTransactions;
   DateTime? _month;
@@ -183,11 +206,15 @@ class _FinanceHomeScreenState extends State<FinanceHomeScreen>
     final month = _month ?? DateTime(now.year, now.month);
     final currentMonth = month.year == now.year && month.month == now.month;
     final filter = FinancialAnalysis.month(month, now);
-    final data = analyzePeriod(app, filter);
-    final previous = analyzePeriod(
-        app, FinancialAnalysis.previousMonth(filter, partial: currentMonth));
-    final commitment =
-        CardCommitment.calculate(app.accounts, app.convertToMain);
+    final (data, previous, commitment) =
+        _monthMemo.of([app.revision, month, today], () {
+      return (
+        analyzePeriod(app, filter),
+        analyzePeriod(app,
+            FinancialAnalysis.previousMonth(filter, partial: currentMonth)),
+        CardCommitment.calculate(app.accounts, app.convertToMain),
+      );
+    });
     String money(double value) => analysisMoney(app, value);
 
     return Scaffold(
@@ -245,16 +272,18 @@ class _FinanceHomeScreenState extends State<FinanceHomeScreen>
                 metadata: app.transactionMetadata,
                 invoicePayments: snapshot.data!,
                 convert: app.convertToMain);
-            final forecast = snapshot.hasData
-                ? at(DateTime(today.year, today.month, today.day + _horizon))
-                : null;
-            final monthEnd = snapshot.hasData
-                ? at(DateTime(today.year, today.month + 1, 0))
-                : null;
-            final timeline = forecast == null
-                ? null
-                : CashTimeline.build(forecast,
-                    now: today, days: _horizon, convert: app.convertToMain);
+            final (forecast, monthEnd, timeline) = _forecastMemo
+                .of([app.revision, today, _horizon, snapshot.data], () {
+              if (!snapshot.hasData) return (null, null, null);
+              final forecast =
+                  at(DateTime(today.year, today.month, today.day + _horizon));
+              return (
+                forecast,
+                at(DateTime(today.year, today.month + 1, 0)),
+                CashTimeline.build(forecast,
+                    now: today, days: _horizon, convert: app.convertToMain),
+              );
+            });
             final overdue =
                 timeline?.overdue.where((e) => e.amount < 0).toList() ??
                     <ForecastEvent>[];

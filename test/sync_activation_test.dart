@@ -1,3 +1,8 @@
+// Each case opens databases and a local server; under a full parallel run
+// the default 30 s was not enough (PLAT-16).
+@Timeout(Duration(seconds: 120))
+library;
+
 import 'dart:io';
 
 import 'package:nexo/database/database_platform.dart';

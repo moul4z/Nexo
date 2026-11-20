@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
 import '../services/import_rules_service.dart';
+import '../widgets/nexo_ui.dart';
 
 class ImportRulesScreen extends StatefulWidget {
   const ImportRulesScreen({super.key});
@@ -25,7 +26,7 @@ class _ImportRulesScreenState extends State<ImportRulesScreen> {
         context: context,
         // The fields outlive the closing animation: they are released with
         // the dialog, not when it starts to close.
-        builder: (ctx) => _Owns(
+        builder: (ctx) => OwnsControllers(
             controllers: [pattern, sub],
             child: StatefulBuilder(builder: (ctx, update) {
               final plain = type == 'expense' || type == 'income';
@@ -265,27 +266,4 @@ String ruleSummary(ImportRule r, AppProvider app) {
   return r.auto
       ? '$what • ${r.type == 'internal' ? 'sai da fila sozinho' : 'lança sozinho'}'
       : what;
-}
-
-/// Releases text controllers when the widget leaves the tree.
-class _Owns extends StatefulWidget {
-  const _Owns({required this.controllers, required this.child});
-  final List<TextEditingController> controllers;
-  final Widget child;
-
-  @override
-  State<_Owns> createState() => _OwnsState();
-}
-
-class _OwnsState extends State<_Owns> {
-  @override
-  void dispose() {
-    for (final c in widget.controllers) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }

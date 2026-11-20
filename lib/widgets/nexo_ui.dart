@@ -919,3 +919,29 @@ class NexoSpendingCalendar extends StatelessWidget {
     ]);
   }
 }
+
+/// Frees the text fields a dialog uses when the dialog leaves the tree.
+/// Disposing them as soon as `showDialog` returns throws while the dialog
+/// is still fading out.
+class OwnsControllers extends StatefulWidget {
+  const OwnsControllers(
+      {super.key, required this.controllers, required this.child});
+  final List<ChangeNotifier> controllers;
+  final Widget child;
+
+  @override
+  State<OwnsControllers> createState() => _OwnsControllersState();
+}
+
+class _OwnsControllersState extends State<OwnsControllers> {
+  @override
+  void dispose() {
+    for (final c in widget.controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}

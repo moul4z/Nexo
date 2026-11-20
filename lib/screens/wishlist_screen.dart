@@ -18,7 +18,8 @@ class WishlistScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppProvider>();
     final l10n = AppLocalizations.of(context)!;
-    String fmt(double v) => formatAmount(v, app.settings.currency);
+    String fmt(double v) =>
+        formatShown(v, app.settings.currency, app.settings.hideBalance);
 
     return Scaffold(
       appBar: AppBar(
@@ -185,6 +186,7 @@ class _WishSheetState extends State<_WishSheet> {
   final _notesCtrl = TextEditingController();
   String _priority = 'medium';
   bool _submitted = false;
+  bool _saving = false;
 
   bool get isEdit => widget.existing != null;
 
@@ -213,23 +215,26 @@ class _WishSheetState extends State<_WishSheet> {
     if (_nameCtrl.text.trim().isEmpty) return;
     final price = parseMoney(_priceCtrl.text) ?? 0;
     final app = context.read<AppProvider>();
-    if (isEdit) {
-      await app.updateWishlist(widget.existing!.copyWith(
-        name: _nameCtrl.text.trim(),
-        targetPrice: price,
-        priority: _priority,
-        notes: _notesCtrl.text.trim(),
-      ));
-    } else {
-      await app.addWishlist(WishlistItem(
-        id: app.newId(),
-        name: _nameCtrl.text.trim(),
-        targetPrice: price,
-        priority: _priority,
-        notes: _notesCtrl.text.trim(),
-      ));
-    }
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this, () => _saving, (v) => setState(() => _saving = v), () async {
+      if (isEdit) {
+        await app.updateWishlist(widget.existing!.copyWith(
+          name: _nameCtrl.text.trim(),
+          targetPrice: price,
+          priority: _priority,
+          notes: _notesCtrl.text.trim(),
+        ));
+      } else {
+        await app.addWishlist(WishlistItem(
+          id: app.newId(),
+          name: _nameCtrl.text.trim(),
+          targetPrice: price,
+          priority: _priority,
+          notes: _notesCtrl.text.trim(),
+        ));
+      }
+    });
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -327,10 +332,12 @@ class _WishSheetState extends State<_WishSheet> {
                       prefixIcon: const Icon(Icons.sticky_note_2_outlined))),
               const SizedBox(height: 20),
               FilledButton(
-                onPressed: () {
-                  AppHaptics.tap(context, HapticStrength.light);
-                  _submit();
-                },
+                onPressed: _saving
+                    ? null
+                    : () {
+                        AppHaptics.tap(context, HapticStrength.light);
+                        _submit();
+                      },
                 style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(50),
                     shape: RoundedRectangleBorder(

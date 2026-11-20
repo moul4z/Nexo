@@ -3,6 +3,7 @@ import '../utils/finance_input.dart';
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
+import '../models/models.dart';
 import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared_widgets.dart';
@@ -94,6 +95,8 @@ class _TransferScreenState extends State<TransferScreen> {
     final app = context.watch<AppProvider>();
     final cs = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context)!;
+    String balance(Account a) =>
+        formatShown(a.balance, a.currency, app.settings.hideBalance);
     // Gold accounts update automatically — exclude from manual transfers.
     final transferable = app.cashAccounts.where((a) => !a.isGold).toList();
     final from = app.accountById(_fromId ?? '');
@@ -226,7 +229,7 @@ class _TransferScreenState extends State<TransferScreen> {
                                                   .colorScheme
                                                   .onPrimary
                                               : color)),
-                              Text(formatAmount(acc.balance, acc.currency),
+                              Text(balance(acc),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
@@ -262,14 +265,13 @@ class _TransferScreenState extends State<TransferScreen> {
                       Expanded(
                           child: _BalanceCol(
                               name: from.name,
-                              balance:
-                                  formatAmount(from.balance, from.currency),
+                              balance: balance(from),
                               label: l10n.transfer_fromAcc(from.currency))),
                       Icon(Icons.arrow_forward_rounded, color: cs.primary),
                       Expanded(
                           child: _BalanceCol(
                               name: to.name,
-                              balance: formatAmount(to.balance, to.currency),
+                              balance: balance(to),
                               label: l10n.transfer_toAcc(to.currency),
                               align: CrossAxisAlignment.end)),
                     ]),

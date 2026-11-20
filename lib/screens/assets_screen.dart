@@ -44,7 +44,8 @@ class AssetsScreen extends StatelessWidget {
               Expanded(
                   child: NexoStatPill(
                       label: l10n.assets_totalAssets,
-                      value: formatAmount(total, app.settings.currency))),
+                      value: formatShown(total, app.settings.currency,
+                          app.settings.hideBalance))),
               const SizedBox(width: 8),
               Expanded(
                   child: NexoStatPill(
@@ -69,6 +70,7 @@ class AssetsScreen extends StatelessWidget {
                   itemBuilder: (_, i) => _AssetCard(
                     asset: app.assets[i],
                     mainCurrency: app.settings.currency,
+                    hidden: app.settings.hideBalance,
                     convertedValue:
                         app.assets[i].currency != app.settings.currency
                             ? app.convertToMain(
@@ -98,11 +100,13 @@ class _AssetCard extends StatelessWidget {
   final AssetItem asset;
   final String mainCurrency;
   final double? convertedValue;
+  final bool hidden;
 
   const _AssetCard({
     required this.asset,
     required this.mainCurrency,
     this.convertedValue,
+    this.hidden = false,
   });
 
   @override
@@ -146,14 +150,14 @@ class _AssetCard extends StatelessWidget {
           // Value + converted
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Text(
-              formatAmount(asset.value, asset.currency),
+              formatShown(asset.value, asset.currency, hidden),
               style: TextStyle(
                   fontFeatures: NexoTones.figures,
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
                   color: assetColor),
             ),
-            if (convertedValue != null)
+            if (convertedValue != null && !hidden)
               Text(
                 '≈ ${formatAmount(convertedValue!, mainCurrency)}',
                 style: TextStyle(
@@ -208,6 +212,7 @@ class _AssetSheetState extends State<_AssetSheet> {
   final _notesCtrl = TextEditingController();
   String _currency = 'EGP';
   bool _submitted = false;
+  bool _saving = false;
 
   bool get isEdit => widget.existing != null;
 
@@ -240,23 +245,26 @@ class _AssetSheetState extends State<_AssetSheet> {
     if (value == null || value < 0) return;
     final app = context.read<AppProvider>();
 
-    if (isEdit) {
-      await app.updateAsset(widget.existing!.copyWith(
-        name: _nameCtrl.text.trim(),
-        value: value,
-        currency: _currency,
-        notes: _notesCtrl.text.trim(),
-      ));
-    } else {
-      await app.addAsset(AssetItem(
-        id: app.newId(),
-        name: _nameCtrl.text.trim(),
-        value: value,
-        currency: _currency,
-        notes: _notesCtrl.text.trim(),
-      ));
-    }
-    if (mounted) Navigator.pop(context);
+    final done = await saveOnce(
+        this, () => _saving, (v) => setState(() => _saving = v), () async {
+      if (isEdit) {
+        await app.updateAsset(widget.existing!.copyWith(
+          name: _nameCtrl.text.trim(),
+          value: value,
+          currency: _currency,
+          notes: _notesCtrl.text.trim(),
+        ));
+      } else {
+        await app.addAsset(AssetItem(
+          id: app.newId(),
+          name: _nameCtrl.text.trim(),
+          value: value,
+          currency: _currency,
+          notes: _notesCtrl.text.trim(),
+        ));
+      }
+    });
+    if (done && mounted) Navigator.pop(context);
   }
 
   @override
@@ -372,10 +380,12 @@ class _AssetSheetState extends State<_AssetSheet> {
             const SizedBox(height: 24),
 
             FilledButton(
-              onPressed: () {
-                AppHaptics.tap(context, HapticStrength.light);
-                _submit();
-              },
+              onPressed: _saving
+                  ? null
+                  : () {
+                      AppHaptics.tap(context, HapticStrength.light);
+                      _submit();
+                    },
               style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                   shape: RoundedRectangleBorder(

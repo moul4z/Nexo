@@ -377,6 +377,16 @@ class AppProvider extends ChangeNotifier {
     super.dispose();
   }
 
+  /// Counts every change the screens are told about. A screen may keep a
+  /// number it computed while this stays the same (UX-12).
+  int revision = 0;
+
+  @override
+  void notifyListeners() {
+    revision++;
+    super.notifyListeners();
+  }
+
   /// Reloads what another device changed through synchronization. No
   /// reminders are rescheduled from scratch and no network is touched.
   Future<void> reloadFromStorage() async {

@@ -1,5 +1,7 @@
 // Screen fixes from the audit's UX list: search by amount (UX-06), a form
-// with something typed asks before closing (UX-11). Fictitious data.
+// with something typed asks before closing (UX-11), hidden values on every
+// screen (UX-05), a save that runs once (UX-04). Fictitious data.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,7 +12,10 @@ import 'package:nexo/l10n/app_localizations.dart';
 import 'package:nexo/models/models.dart';
 import 'package:nexo/providers/app_provider.dart';
 import 'package:nexo/screens/add_transaction_screen.dart';
+import 'package:nexo/screens/assets_screen.dart';
 import 'package:nexo/services/transaction_filter.dart';
+import 'package:nexo/theme/app_theme.dart';
+import 'package:nexo/utils/snackbar.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -93,5 +98,68 @@ void main() {
     await tester.tap(find.text('Descartar'));
     await tester.pumpAndSettle();
     expect(find.byType(AddTransactionScreen), findsNothing);
+  });
+
+  testWidgets('"Ocultar saldo" hides the amounts in Bens too (UX-05)',
+      (tester) async {
+    final app = AppProvider()
+      ..assets = [
+        AssetItem(
+            id: 'c', name: 'Carro fictício', value: 1234.5, currency: 'BRL'),
+        AssetItem(
+            id: 'd', name: 'Reserva fictícia', value: 10, currency: 'USD'),
+      ];
+    app.settings.hideBalance = true;
+    await tester.pumpWidget(ChangeNotifierProvider.value(
+        value: app,
+        child: MaterialApp(
+            locale: const Locale('pt'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: const AssetsScreen())));
+    await tester.pump();
+    expect(find.text('Carro fictício'), findsOneWidget);
+    expect(find.textContaining('1.234'), findsNothing);
+    expect(find.textContaining('US\$'), findsNothing);
+    expect(find.textContaining('≈'), findsNothing,
+        reason: 'the converted value would give the amount away');
+    expect(find.text(hiddenAmount), findsNWidgets(3));
+
+    app.settings.hideBalance = false;
+    app.notifyListeners();
+    await tester.pump();
+    expect(find.textContaining('1.234,50'), findsWidgets);
+  });
+
+  testWidgets('a save runs once and a refused one says why (UX-04)',
+      (tester) async {
+    late State state;
+    await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: StatefulBuilder(builder: (context, _) {
+      state = context.findAncestorStateOfType<State>()!;
+      return const SizedBox();
+    }))));
+    var busy = false;
+    var runs = 0;
+    final gate = Completer<void>();
+    final first = saveOnce(state, () => busy, (v) => busy = v, () async {
+      runs++;
+      await gate.future;
+    });
+    final second = saveOnce(state, () => busy, (v) => busy = v, () async {
+      runs++;
+    });
+    expect(await second, isFalse, reason: 'a second tap does nothing');
+    gate.complete();
+    expect(await first, isTrue);
+    expect(runs, 1);
+    expect(busy, isFalse);
+
+    final refused = saveOnce(state, () => busy, (v) => busy = v,
+        () async => throw StateError('Essa conta foi apagada.'));
+    expect(await refused, isFalse);
+    await tester.pump();
+    expect(find.text('Essa conta foi apagada.'), findsOneWidget);
+    expect(busy, isFalse);
   });
 }
