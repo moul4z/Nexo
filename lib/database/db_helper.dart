@@ -25,7 +25,7 @@ class NewerDatabaseException implements Exception {
 
 class DBHelper {
   static Database? _db;
-  static const int _version = 30;
+  static const int _version = 31;
 
   /// Public accessor for the current DB/backup schema version, so UI code
   /// (e.g. the Backup screen) never has to hardcode a copy that can drift
@@ -71,8 +71,10 @@ class DBHelper {
   static const _copyPrefix = 'antes-do-schema-';
 
   /// Before a schema upgrade touches the file, keeps a copy of it beside the
-  /// database (the last three). The upgrades only add tables and columns,
-  /// so a failure to copy is recorded and does not stop the app.
+  /// database (the last three). The upgrades add tables and columns; the
+  /// one that rebuilds a table (31) checks the copy row by row inside the
+  /// same transaction. So a failure to copy is recorded and does not stop
+  /// the app.
   static Future<void> _copyBeforeUpgrade(String path) async {
     try {
       final file = File(path);
@@ -579,6 +581,8 @@ class DBHelper {
         debugPrint('Migration v$oldV step failed');
       }
     }
+    // Last: it copies every column the steps above may have just added.
+    if (oldV < 31) await schema31(db);
   }
 
   static Future<void> _ensureFinanceSchema(Database db) async {
@@ -868,6 +872,7 @@ class DBHelper {
     await createSharedSettings(db);
     await schema29(db);
     await schema30(db);
+    await schema31(db); // nothing to do: the table is born with the events
     await _insertDefaults(db);
   }
 
@@ -917,6 +922,48 @@ class DBHelper {
     if (!columns.any((c) => c['name'] == 'vanished')) {
       await db.execute('ALTER TABLE notification_suggestions '
           'ADD COLUMN vanished INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+
+  /// 1.19: corporate events of an asset (desdobramento, grupamento,
+  /// bonificação). SQLite cannot widen a CHECK, so `investment_operations`
+  /// is rebuilt: the same columns and rows, compared row by row before the
+  /// old table goes, then its index and sync triggers as they were. All in
+  /// the upgrade's transaction: any failure leaves the file as it was.
+  static Future<void> schema31(DatabaseExecutor db) async {
+    const table = 'investment_operations';
+    final found = await db.rawQuery(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        [table]);
+    if (found.isEmpty ||
+        (found.single['sql'] as String)
+            .contains(InvestmentRepository.eventsCheck)) {
+      return;
+    }
+    final triggers = await db.rawQuery(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' "
+        'AND tbl_name = ? AND sql IS NOT NULL',
+        [table]);
+    const columns = 'id, investment_id, kind, quantity, cents, date, '
+        'created_at, cash_account_id, brl_cents, tax_cents';
+    await InvestmentRepository.createOperations(db, '${table}_v31');
+    await db.execute(
+        'INSERT INTO ${table}_v31 ($columns) SELECT $columns FROM $table');
+    Future<int> count(String sql) async =>
+        Sqflite.firstIntValue(await db.rawQuery(sql)) ?? -1;
+    final before = await count('SELECT COUNT(*) FROM $table');
+    final after = await count('SELECT COUNT(*) FROM ${table}_v31');
+    final differ = await count('SELECT COUNT(*) FROM ('
+        'SELECT $columns FROM $table EXCEPT SELECT $columns FROM ${table}_v31)');
+    if (before != after || differ != 0) {
+      throw StateError('schema31: a cópia das operações não confere');
+    }
+    await db.execute('DROP TABLE $table');
+    await db.execute('ALTER TABLE ${table}_v31 RENAME TO $table');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS investment_ops_asset ON $table(investment_id)');
+    for (final t in triggers) {
+      await db.execute(t['sql'] as String);
     }
   }
 

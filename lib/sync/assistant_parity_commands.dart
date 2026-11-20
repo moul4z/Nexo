@@ -1,4 +1,5 @@
 import '../database/db_helper.dart';
+import '../investments/investment_models.dart';
 import '../investments/investment_repository.dart';
 import '../models/models.dart';
 import '../models/transaction_metadata.dart';
@@ -32,7 +33,7 @@ class AssistantParityCommands {
     'transaction.split_bill', 'lended.receive',
     'budget.save', 'account.edit', 'goal.adjust', 'goal.edit',
     'recurring.edit', 'investment.archive', 'investment.edit',
-    'investment.unrecord',
+    'investment.event', 'investment.unrecord',
     'investment.link', 'loan.add', 'loan.edit', 'loan.delete', 'loan.unpay',
     'lended.edit', 'lended.delete', 'person.edit', 'person.delete',
     'rule.save', 'rule.delete', 'suggestion.transfer', 'suggestion.accept',
@@ -547,6 +548,37 @@ class AssistantParityCommands {
             institution: a['institution'] as String?);
         await app.refreshInvestmentCash();
         return {'message': 'Dados do ativo corrigidos.'};
+      case 'investment.event':
+        // Same rule as the "Evento da empresa" form: units from what was
+        // held at the end of the data com, no account moves.
+        final opId = 'assistant-event:$commandId';
+        final all = await investments.load();
+        if (all.any((p) => p.operations.any((o) => o.id == opId))) {
+          return {'operation_id': opId, 'message': 'Já estava registrado.'};
+        }
+        final position = all
+                .where((p) => p.investment.id == a['investment_id'])
+                .firstOrNull ??
+            (throw StateError('O ativo não existe mais.'));
+        final kindEvent = a['event'] as String;
+        final (from, to) = kindEvent == 'bonus'
+            ? bonusRatio(a['percent'] as num)
+            : ((a['from'] as num).toInt(), (a['to'] as num).toInt());
+        final op = position.event(
+            id: opId,
+            kind: kindEvent,
+            day: _day(a['date']),
+            from: from,
+            to: to,
+            unitCostCents: (a['unit_cost_cents'] as num?)?.toInt() ?? 0);
+        await investments.record(op);
+        await app.refreshInvestmentCash();
+        return {
+          'operation_id': opId,
+          'quantity_micros': op.quantity,
+          'cost_cents': op.cents,
+          'message': 'Evento registrado (${op.label}); nenhuma conta mudou.'
+        };
       case 'investment.unrecord':
         final id = a['operation_id'] as String;
         if (!(await investments.load())

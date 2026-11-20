@@ -876,6 +876,28 @@ void main() {
                 {'id': 'assistant-inv:old', 'ticker': 'não vale!'}))
             .$1,
         'rejected');
+
+    // A corporate event: units from the data com, no money, retried safely.
+    final split = {
+      'investment_id': 'assistant-inv:old',
+      'event': 'split',
+      'date': '2026-02-01',
+      'from': 1,
+      'to': 3
+    };
+    expect((await send('investment.event', split, id: 'ev')).$1, 'done');
+    expect((await send('investment.event', split, id: 'ev')).$1, 'done');
+    Future<InvestmentPosition> oldPosition() async =>
+        (await InvestmentRepository().load())
+            .firstWhere((p) => p.investment.id == 'assistant-inv:old');
+    expect((await oldPosition()).quantity, 6000000);
+    expect((await oldPosition()).cost, 5000);
+    expect(await balance('bank'), 950);
+    expect(
+        (await send('investment.event',
+                {...split, 'event': 'reverse_split', 'from': 1, 'to': 2}))
+            .$1,
+        'rejected');
   });
 
   test('variable budget: base plus profit, by settings, on every device',
@@ -1031,9 +1053,14 @@ void main() {
   });
 
   test('invoice paid on a given day keeps that day', () async {
+    // Inside the last closed invoice whatever today is (the card closes on
+    // the 19th); "40 days ago" fell in the one before it on some days.
+    final now = DateTime.now();
+    final closed = now.day > 19
+        ? DateTime(now.year, now.month, 19)
+        : DateTime(now.year, now.month - 1, 19);
     await app.addTransaction(expense('compra', 80,
-        account: 'nu',
-        date: DateTime.now().subtract(const Duration(days: 40))));
+        account: 'nu', date: closed.subtract(const Duration(days: 2))));
     final paid = await send('invoice.pay', {
       'card_id': 'nu',
       'from_account_id': 'bank',

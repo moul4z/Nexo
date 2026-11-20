@@ -1177,6 +1177,14 @@ class _InvestmentDetailState extends State<_InvestmentDetail> {
                                               _OperationDialog(position: p)),
                                       icon: const Icon(Icons.add),
                                       label: const Text('Registrar operação')),
+                                  if (p.quantity > 0)
+                                    OutlinedButton.icon(
+                                        onPressed: () => showDialog<void>(
+                                            context: context,
+                                            builder: (_) =>
+                                                _EventDialog(position: p)),
+                                        icon: const Icon(Icons.call_split),
+                                        label: const Text('Evento da empresa')),
                                   OutlinedButton.icon(
                                       onPressed: () => showDialog<void>(
                                           context: context,
@@ -1233,10 +1241,12 @@ class _InvestmentDetailState extends State<_InvestmentDetail> {
                                   Card(
                                       child: ListTile(
                                           title: Text(op.label),
-                                          subtitle: Text(
-                                              '${ptDate(op.date.toLocal())} · ${_moneyIn(context, op.cents, p.investment.currency)}${p.investment.foreign ? ' (${_money(context, op.mainCents)}${op.fxMicros == null ? '' : ' a ${_rate(op.fxMicros!)}'})' : ''}${op.kind == 'income' ? (op.taxCents > 0 ? ' · retido ${_moneyIn(context, op.taxCents, p.investment.currency)}' : '') : ' · ${private ? '••••' : _quantity(op.quantity)} un.'}\n${op.cashAccountId == null ? 'Sem movimentação em conta' : 'Conta: ${context.read<AppProvider>().accountById(op.cashAccountId!)?.name ?? 'Vinculada'}'}'),
+                                          subtitle: Text(op.isEvent
+                                              ? '${ptDate(op.date.toLocal())} · ${op.kind == 'reverse_split' ? '−' : '+'}${private ? '••••' : _quantity(op.quantity)} un.${op.kind == 'bonus' ? ' · custo ${_moneyIn(context, op.cents, p.investment.currency)}' : ''}\nSem dinheiro em conta'
+                                              : '${ptDate(op.date.toLocal())} · ${_moneyIn(context, op.cents, p.investment.currency)}${p.investment.foreign ? ' (${_money(context, op.mainCents)}${op.fxMicros == null ? '' : ' a ${_rate(op.fxMicros!)}'})' : ''}${op.kind == 'income' ? (op.taxCents > 0 ? ' · retido ${_moneyIn(context, op.taxCents, p.investment.currency)}' : '') : ' · ${private ? '••••' : _quantity(op.quantity)} un.'}\n${op.cashAccountId == null ? 'Sem movimentação em conta' : 'Conta: ${context.read<AppProvider>().accountById(op.cashAccountId!)?.name ?? 'Vinculada'}'}'),
                                           onTap: op.cashAccountId == null &&
-                                                  op.cents > 0
+                                                  op.cents > 0 &&
+                                                  !op.isEvent
                                               ? () => showDialog<void>(
                                                   context: context,
                                                   builder: (_) =>
@@ -1691,6 +1701,231 @@ class _OperationDialogState extends State<_OperationDialog> {
             FilledButton(
                 onPressed: busy ? null : save,
                 child: Text(busy ? 'Salvando…' : 'Salvar'))
+          ]);
+}
+
+/// Desdobramento, grupamento or bonificação: the quantity changes on the
+/// event's day and no account moves. The units come from what was held on
+/// that day, so an event registered late still lands right.
+class _EventDialog extends StatefulWidget {
+  final InvestmentPosition position;
+  const _EventDialog({required this.position});
+  @override
+  State<_EventDialog> createState() => _EventDialogState();
+}
+
+class _EventDialogState extends State<_EventDialog> {
+  final from = TextEditingController(text: '1'),
+      to = TextEditingController(text: '2'),
+      percent = TextEditingController(),
+      unitCost = TextEditingController();
+  final id = const Uuid().v4();
+  String kind = 'split';
+  DateTime date = DateTime.now();
+  String? error;
+  bool busy = false;
+
+  @override
+  void dispose() {
+    for (final c in [from, to, percent, unitCost]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Investment get asset => widget.position.investment;
+
+  /// The operation the form describes, or the reason it cannot be one.
+  (InvestmentOperation?, String?) _draft() {
+    try {
+      int a, b, unitCents = 0;
+      if (kind == 'bonus') {
+        final p = double.tryParse(percent.text.trim().replaceAll(',', '.'));
+        final cost = parseMoney(unitCost.text);
+        if (p == null || p <= 0 || p > 1000) {
+          return (null, 'Informe o percentual, como 10 para 10%.');
+        }
+        if (cost == null || cost < 0) {
+          return (null, 'Informe o custo por ação nova do fato relevante.');
+        }
+        (a, b) = bonusRatio(p);
+        unitCents = (cost * 100).round();
+      } else {
+        final x = int.tryParse(from.text.trim()),
+            y = int.tryParse(to.text.trim());
+        if (x == null || y == null || x < 1 || y < 1 || x > 1000 || y > 1000) {
+          return (null, 'Use números inteiros, como 1 para 2.');
+        }
+        (a, b) = (x, y);
+      }
+      return (
+        widget.position.event(
+            id: id,
+            kind: kind,
+            day: date,
+            from: a,
+            to: b,
+            unitCostCents: unitCents),
+        null
+      );
+    } on FormatException catch (e) {
+      return (null, e.message);
+    }
+  }
+
+  Future<void> save() async {
+    if (busy) return;
+    final (op, problem) = _draft();
+    if (op == null) {
+      setState(() => error = problem);
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await InvestmentRepository().record(op);
+      if (mounted) {
+        Navigator.pop(context);
+        _message(context, 'Evento registrado. Nenhuma conta mudou.');
+      }
+    } on FormatException catch (e) {
+      if (mounted) setState(() => error = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => error =
+            'Não foi possível salvar. Seus dados anteriores foram preservados.');
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  String _preview() {
+    final (op, problem) = _draft();
+    if (op == null) return problem ?? '';
+    final before = widget.position.heldOn(date);
+    final after = op.kind == 'reverse_split'
+        ? before - op.quantity
+        : before + op.quantity;
+    final fraction = after % investmentScale;
+    return [
+      'Nessa data: ${_quantity(before)} un. Depois: ${_quantity(after)} un.',
+      op.kind == 'bonus'
+          ? 'O custo sobe ${_moneyIn(context, op.cents, asset.currency)}; não conta como aporte.'
+          : 'O custo total não muda; o preço médio se ajusta.',
+      if (op.kind == 'reverse_split' && fraction != 0)
+        'A fração de ${_quantity(fraction)} un. é leiloada pela B3 e paga em dinheiro: registre como venda quando o valor cair.',
+      'Conta quem tinha o ativo no fim da data com. Nenhuma conta é movimentada.',
+    ].join('\n');
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+          title: const Text('Evento da empresa'),
+          content: SizedBox(
+              width: 480,
+              child: SingleChildScrollView(
+                  child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                    Wrap(spacing: 8, runSpacing: 8, children: [
+                      for (final (k, label) in [
+                        ('split', 'Desdobramento'),
+                        ('reverse_split', 'Grupamento'),
+                        if (!asset.foreign) ('bonus', 'Bonificação'),
+                      ])
+                        ChoiceChip(
+                            label: Text(label),
+                            selected: kind == k,
+                            onSelected: busy
+                                ? null
+                                : (_) => setState(() {
+                                      kind = k;
+                                      error = null;
+                                      if (k == 'split') {
+                                        from.text = '1';
+                                        to.text = '2';
+                                      } else if (k == 'reverse_split') {
+                                        from.text = '10';
+                                        to.text = '1';
+                                      }
+                                    })),
+                    ]),
+                    const SizedBox(height: 12),
+                    if (kind == 'bonus') ...[
+                      TextField(
+                          key: const ValueKey('event-percent'),
+                          controller: percent,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(
+                              labelText: 'Bonificação (%)',
+                              helperText:
+                                  '10 quer dizer 1 ação nova a cada 10.')),
+                      TextField(
+                          key: const ValueKey('event-unit-cost'),
+                          controller: unitCost,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(
+                              labelText: 'Custo por ação nova (R\$)',
+                              helperText:
+                                  'O valor do fato relevante; entra no custo para o imposto.')),
+                    ] else
+                      Row(children: [
+                        Expanded(
+                            child: TextField(
+                                key: const ValueKey('event-from'),
+                                controller: from,
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => setState(() {}),
+                                decoration:
+                                    const InputDecoration(labelText: 'De'))),
+                        const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            child: Text('para')),
+                        Expanded(
+                            child: TextField(
+                                key: const ValueKey('event-to'),
+                                controller: to,
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => setState(() {}),
+                                decoration:
+                                    const InputDecoration(labelText: 'Para'))),
+                      ]),
+                    TextButton.icon(
+                        onPressed: busy
+                            ? null
+                            : () async {
+                                final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: date,
+                                    firstDate: DateTime(1970),
+                                    lastDate: DateTime.now());
+                                if (picked != null && mounted) {
+                                  setState(() => date = picked);
+                                }
+                              },
+                        icon: const Icon(Icons.calendar_today_outlined),
+                        label: Text('Data com: ${ptDate(date)}')),
+                    Text(_preview()),
+                    if (error != null)
+                      Text(error!,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.error)),
+                  ]))),
+          actions: [
+            TextButton(
+                onPressed: busy ? null : () => Navigator.pop(context),
+                child: const Text('Cancelar')),
+            FilledButton(
+                onPressed: busy ? null : save,
+                child: Text(busy ? 'Salvando…' : 'Registrar'))
           ]);
 }
 

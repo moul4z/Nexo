@@ -27,16 +27,23 @@ class InvestmentRepository {
       archived INTEGER NOT NULL DEFAULT 0,
       currency TEXT NOT NULL DEFAULT 'BRL',
       fx_micros INTEGER NOT NULL DEFAULT 1000000)''');
-    await db.execute('''CREATE TABLE IF NOT EXISTS investment_operations (
+    await createOperations(db, 'investment_operations');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS investment_ops_asset ON investment_operations(investment_id)');
+  }
+
+  /// The kinds an operation may have; schema 31 added the corporate events.
+  static const eventsCheck =
+      "kind IN ('buy','sell','opening','income','split','reverse_split','bonus')";
+
+  static Future<void> createOperations(DatabaseExecutor db, String name) =>
+      db.execute('''CREATE TABLE IF NOT EXISTS $name (
       id TEXT PRIMARY KEY, investment_id TEXT NOT NULL,
-      kind TEXT NOT NULL CHECK(kind IN ('buy','sell','opening','income')),
+      kind TEXT NOT NULL CHECK($eventsCheck),
       quantity INTEGER NOT NULL CHECK(quantity >= 0),
       cents INTEGER NOT NULL CHECK(cents >= 0),
       date TEXT NOT NULL, created_at TEXT NOT NULL, cash_account_id TEXT,
       brl_cents INTEGER, tax_cents INTEGER NOT NULL DEFAULT 0)''');
-    await db.execute(
-        'CREATE INDEX IF NOT EXISTS investment_ops_asset ON investment_operations(investment_id)');
-  }
 
   /// Schema 28: assets in dollars. Only adds columns, whose defaults are
   /// exactly what every existing row already meant (reais).

@@ -48,6 +48,12 @@ export function position(inv: Row, all: Row[]): Position {
       realized += main - removed;
     } else if (o.kind === "income") {
       nativeIncome += c; nativeTax += num(o.tax_cents); income += main;
+    } else if (o.kind === "split") {
+      quantity += q; // corporate events: no money moves
+    } else if (o.kind === "reverse_split") {
+      quantity = Math.max(0, quantity - q);
+    } else if (o.kind === "bonus") {
+      quantity += q; nativeCost += c; cost += main;
     }
   }
   const nativeValue = ratio(quantity, num(inv.price_micros), 10_000_000_000);

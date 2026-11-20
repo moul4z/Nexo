@@ -66,7 +66,10 @@ const appWriteActions = <String, List<String>>{
   'recurring.history_insert': ['pay_recurring', 'skip_recurring'],
   // Investments
   'investment.create': ['add_investment'],
-  'investment.record': ['record_investment_operation'],
+  'investment.record': [
+    'record_investment_operation',
+    'record_investment_event'
+  ],
   'investment.price': ['update_investment_price'],
   'investment.archive': ['archive_investment'],
   'investment.edit': ['update_investment'],

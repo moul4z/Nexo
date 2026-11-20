@@ -13,7 +13,7 @@ import { checkSetting, settingDefs, sharedSettings } from "./settings.ts";
 import { cardInvoices, occurrences } from "./invoices.ts";
 import { dailyAverage, projection, type SimEvent, simulate, walk } from "./cash.ts";
 import { reconcileAccount } from "./inbox.ts";
-import { FX_SCALE, lastRate, ratio } from "./portfolio.ts";
+import { FX_SCALE, lastRate, position, ratio } from "./portfolio.ts";
 import { toMovement } from "./inbox.ts";
 import { direction } from "./reconcile.ts";
 
@@ -187,8 +187,18 @@ export const parityActions: (ToolDefinition & { destructive?: boolean })[] = [
       institution: { type: "string", maxLength: 120, description: "Corretora ou banco onde o ativo está" } }, ["id"]),
   },
   {
+    name: "record_investment_event", title: "Desdobramento, grupamento ou bonificação",
+    description: "Registra um evento da empresa num ativo (ids em get_investments): desdobramento (event split, from 1, to 2: cada ação vira duas), grupamento (reverse_split, from 10, to 1) ou bonificação (bonus, percent 10 para 10% e unit_cost, o custo em reais por ação nova do fato relevante; só ativos em reais). A quantidade sai do que havia no fim da data com (date). Nenhuma conta muda; o custo total só sobe na bonificação, que não conta como aporte. Fração do grupamento é leiloada e paga à parte: registre como venda quando o dinheiro cair.",
+    inputSchema: obj({ investment_id: idField, event: { type: "string", enum: ["split", "reverse_split", "bonus"] },
+      date: { ...dateField, description: "Data com: último dia com direito ao evento" },
+      from: { type: "integer", minimum: 1, maximum: 1000 }, to: { type: "integer", minimum: 1, maximum: 1000 },
+      percent: { type: "number", exclusiveMinimum: 0, maximum: 1000 },
+      unit_cost: { type: "number", minimum: 0, maximum: 1000000, description: "Reais por ação nova" } },
+      ["investment_id", "event", "date"]),
+  },
+  {
     name: "delete_investment_operation", title: "Apagar operação de investimento",
-    description: "Apaga uma compra, venda ou provento (ids em get_investments). A conta vinculada é estornada junto.",
+    description: "Apaga uma compra, venda, provento ou evento da empresa (ids em get_investments). A conta vinculada é estornada junto.",
     destructive: true,
     inputSchema: obj({ operation_id: idField }, ["operation_id"]),
   },
@@ -582,7 +592,7 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
           objetivos: { read: ["get_goals"], write: ["add_goal", "update_goal", "move_goal", "delete_goal"], editable: ["name", "target", "target_date", "completed", "color"] },
           recorrentes: { read: ["get_recurring", "get_upcoming_bills"], write: ["add_recurring", "update_recurring", "pay_recurring", "skip_recurring", "delete_recurring"],
             editable: ["name", "amount", "account_id", "category_id", "next_date", "end_date", "frequency", "every", "kind", "notes", "reminder_enabled", "reminder_time"] },
-          investimentos: { read: ["get_investment_summary", "get_investments"], write: ["add_investment", "record_investment_operation", "update_investment_price", "update_investment", "archive_investment", "delete_investment_operation", "link_investment_operation"] },
+          investimentos: { read: ["get_investment_summary", "get_investments"], write: ["add_investment", "record_investment_operation", "update_investment_price", "update_investment", "record_investment_event", "archive_investment", "delete_investment_operation", "link_investment_operation"] },
           empréstimos: { read: ["get_loans"], write: ["add_loan", "update_loan", "delete_loan", "pay_loan_installment", "skip_loan_installment", "delete_loan_payment"] },
           emprestado_e_devido: { read: ["get_lended"], write: ["add_lended", "update_lended", "settle_lended", "delete_lended", "update_person", "delete_person"] },
           bens_e_desejos: { read: ["get_assets", "get_wishlist"], write: ["add_asset", "update_asset", "delete_asset", "add_wishlist_item", "update_wishlist_item", "delete_wishlist_item"] },
@@ -847,10 +857,8 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       const inv = find(l.investments, args.id);
       if (!inv) throw new ToolInputError("Investimento não encontrado. Use get_investments.");
       const archived = bool(args.archived, "archived") ?? true;
-      if (archived) {
-        const qty = l.investmentOperations.filter((o) => o.investment_id === inv.id)
-          .reduce((q, o) => q + (o.kind === "sell" ? -num(o.quantity) : o.kind === "income" ? 0 : num(o.quantity)), 0);
-        if (qty !== 0) throw new ToolInputError("Encerre a posição (venda tudo) antes de retirá-la da carteira.");
+      if (archived && position(inv, l.investmentOperations).quantity !== 0) {
+        throw new ToolInputError("Encerre a posição (venda tudo) antes de retirá-la da carteira.");
       }
       return pending((await enqueue("investment.archive", { id: text(inv.id), archived })).id, archived ? "Retirada da carteira" : "Volta à carteira");
     }
@@ -875,6 +883,42 @@ export async function callParityAction(name: string, rawArgs: unknown, l: Ledger
       }
       if (Object.keys(body).length === 1) throw new ToolInputError("Informe name, ticker ou institution.");
       return pending((await enqueue("investment.edit", body)).id, "Dados do ativo");
+    }
+    case "record_investment_event": {
+      only(args, ["investment_id", "event", "date", "from", "to", "percent", "unit_cost"]);
+      const inv = find(l.investments, args.investment_id);
+      if (!inv) throw new ToolInputError("Investimento não encontrado. Use get_investments.");
+      const event = args.event;
+      if (event !== "split" && event !== "reverse_split" && event !== "bonus") {
+        throw new ToolInputError("event deve ser split, reverse_split ou bonus.");
+      }
+      const body: Args = { investment_id: text(inv.id), event, date: dateArg(args.date, "date") };
+      if (event === "bonus") {
+        if ((text(inv.currency) || "BRL") !== "BRL") throw new ToolInputError("Bonificação só para ativos em reais por enquanto.");
+        if (args.from !== undefined || args.to !== undefined) throw new ToolInputError("Bonificação usa percent, não from/to.");
+        const p = args.percent;
+        if (typeof p !== "number" || !(p > 0) || p > 1000 || Math.abs(Math.round(p * 100) - p * 100) > 1e-6) {
+          throw new ToolInputError("percent: de 0,01 a 1000, com até 2 casas.");
+        }
+        const cost = args.unit_cost;
+        if (typeof cost !== "number" || !(cost >= 0) || cost > 1000000 || Math.abs(Math.round(cost * 100) - cost * 100) > 1e-6) {
+          throw new ToolInputError("unit_cost: o custo por ação nova em reais, com até 2 casas (0 se o fato relevante não der).");
+        }
+        body.percent = p;
+        body.unit_cost_cents = Math.round(cost * 100);
+      } else {
+        if (args.percent !== undefined || args.unit_cost !== undefined) throw new ToolInputError("percent e unit_cost são só da bonificação.");
+        const from = args.from, to = args.to;
+        const whole = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000;
+        if (!whole(from) || !whole(to)) throw new ToolInputError("from e to: inteiros de 1 a 1000, como 1 para 2.");
+        if (event === "split" ? (to as number) <= (from as number) : (to as number) >= (from as number)) {
+          throw new ToolInputError(event === "split" ? "No desdobramento to é maior que from (1 para 2)." : "No grupamento to é menor que from (10 para 1).");
+        }
+        body.from = from;
+        body.to = to;
+      }
+      const label = event === "split" ? "Desdobramento" : event === "reverse_split" ? "Grupamento" : "Bonificação";
+      return pending((await enqueue("investment.event", body)).id, label);
     }
     case "delete_investment_operation":
     case "link_investment_operation": {

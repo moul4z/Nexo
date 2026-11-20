@@ -145,7 +145,9 @@ void main() {
       'Windows card payment stays neutral and recurring occurrence is idempotent',
       () async {
     final now = DateTime.now();
-    final cycleEnd = DateTime(now.year, now.month + (now.day > 20 ? 1 : 0), 20);
+    // A purchase on the closing day (20) is already in the next invoice.
+    final cycleEnd =
+        DateTime(now.year, now.month + (now.day >= 20 ? 1 : 0), 20);
     await app.addTransaction(tx('card-purchase', amount: 100, account: 'card'));
     await app.addTransfer(
         fromId: 'bank',

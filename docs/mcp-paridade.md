@@ -73,6 +73,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Agenda: contas a vencer | get_upcoming_bills, get_cash_projection | ok | 1.19: `safe_per_day` (quanto dá por dia sem ficar negativo) e `daily_spending` (média de 4 semanas ou valor por dia), iguais à Agenda; casos em `test/fixtures/forecast_cases.json` |
 | Investir: carteira | get_investment_summary, get_investments | ok | operações com id; em reais, com `by_institution`, `by_currency`, `by_country` |
 | Investir: cadastrar, operar, preço, corrigir dados | add_investment, record_investment_operation, update_investment_price, update_investment | ok | 1.19: nome, código e corretora; a corretora vem da conta do tipo Corretora usada na compra |
+| Investir: desdobramento, grupamento, bonificação | record_investment_event | ok | 1.19 (schema 31): a quantidade sai do que havia no fim da data com; nenhuma conta muda; bonificação soma o custo informado, sem contar como aporte |
 | Investir: ação dos EUA (dólar) | add_investment (`currency` USD, `fx_rate`), record_investment_operation (`fx_rate`, `tax_withheld`) | ok | custo em dólar e em reais da data; conta em dólar; efeito do preço e do câmbio em get_investments |
 | Investir: retirar da carteira | archive_investment | ok | só posição zerada |
 | Investir: apagar operação | delete_investment_operation | ok | estorna a conta |

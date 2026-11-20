@@ -21,6 +21,27 @@ int? parseInvestmentQuantity(String text) {
   return units > 0 && units <= 1000000000000 ? units : null;
 }
 
+/// Units a corporate event adds (desdobramento, bonificação) or takes away
+/// (grupamento) from [held], all in millionths. A ratio is "from N to M":
+/// desdobramento 1 para 2, grupamento 10 para 1, and bonificação of p% is
+/// 100 para 100 + p. Rounded down to the millionth; a fraction the company
+/// cannot deliver is sold apart and registered as a sale.
+int eventUnits(int held, {required int from, required int to}) {
+  if (held <= 0 || from <= 0 || to <= 0 || from == to) {
+    throw const FormatException('Proporção inválida.');
+  }
+  return (held * to ~/ from - held).abs();
+}
+
+/// The ratio of a bonificação of [percent] (up to two decimals).
+(int from, int to) bonusRatio(num percent) {
+  final basis = (percent * 100).round();
+  if (basis <= 0 || basis > 100000) {
+    throw const FormatException('Percentual de bonificação inválido.');
+  }
+  return (10000, 10000 + basis);
+}
+
 /// Currencies an asset can be priced in. The portfolio adds everything up in
 /// reais: a foreign operation keeps what it cost in reais on its own day.
 const investmentCurrencies = ['BRL', 'USD'];
@@ -182,8 +203,18 @@ class InvestmentOperation {
         'buy' => 'Compra / aporte',
         'sell' => 'Venda / resgate',
         'opening' => 'Posição inicial',
+        'split' => 'Desdobramento',
+        'reverse_split' => 'Grupamento',
+        'bonus' => 'Bonificação',
         _ => 'Provento recebido'
       };
+
+  /// A corporate event: changes the quantity without money moving.
+  /// Desdobramento adds units, grupamento takes them away (cost stays);
+  /// bonificação adds units at the cost the company assigned to them.
+  bool get isEvent => events.contains(kind);
+  static const events = {'split', 'reverse_split', 'bonus'};
+  static const kinds = {'buy', 'sell', 'opening', 'income', ...events};
   Map<String, Object?> toMap() => {
         'id': id,
         'investment_id': investmentId,
@@ -214,7 +245,10 @@ class InvestmentOperation {
   void validate() {
     if (id.isEmpty ||
         investmentId.isEmpty ||
-        !['buy', 'sell', 'opening', 'income'].contains(kind) ||
+        !kinds.contains(kind) ||
+        // An event moves no money: no account, and a split has no cost.
+        (isEvent && (cashAccountId != null || taxCents != 0)) ||
+        (kind != 'bonus' && isEvent && (cents != 0 || (brlCents ?? 0) != 0)) ||
         cents < 0 ||
         cents > 100000000000000 ||
         quantity < 0 ||
@@ -266,6 +300,9 @@ class InvestmentPosition {
         throw const FormatException(
             'Operação em outra moeda precisa do valor em reais da data.');
       }
+      if (op.isEvent && quantity == 0) {
+        throw const FormatException('Não há posição nessa data.');
+      }
       switch (op.kind) {
         case 'buy':
         case 'opening':
@@ -290,6 +327,19 @@ class InvestmentPosition {
           nativeIncome += op.cents;
           nativeTax += op.taxCents;
           income += op.mainCents;
+        case 'split':
+          quantity += op.quantity;
+        case 'reverse_split':
+          if (op.quantity >= quantity) {
+            throw const FormatException(
+                'O grupamento supera a quantidade disponível nessa data.');
+          }
+          quantity -= op.quantity;
+        case 'bonus':
+          // Cost of the new units, never a contribution: no money left.
+          quantity += op.quantity;
+          nativeCost += op.cents;
+          cost += op.mainCents;
       }
       if (quantity > 1000000000000 || cost > 100000000000000) {
         throw const FormatException('A posição excede o limite suportado.');
@@ -325,4 +375,62 @@ class InvestmentPosition {
 
   /// What the rate did to the money still invested: the rest of [unrealized].
   int get fxEffect => unrealized - priceEffect;
+
+  /// Units held at the end of [day] (local), from the operations up to it.
+  int heldOn(DateTime day) {
+    final end = DateTime(day.year, day.month, day.day + 1);
+    return InvestmentPosition(
+        investment, operations.where((o) => o.date.isBefore(end))).quantity;
+  }
+
+  /// A corporate event over this position, counted from what was held at
+  /// the end of [day] (the "data com"). It is dated at the very end of
+  /// that day, so every trade of the day comes before it. [unitCostCents]
+  /// is the cost per new unit of a bonificação, in the asset currency.
+  InvestmentOperation event(
+      {required String id,
+      required String kind,
+      required DateTime day,
+      required int from,
+      required int to,
+      int unitCostCents = 0,
+      DateTime? createdAt}) {
+    if (!InvestmentOperation.events.contains(kind)) {
+      throw const FormatException('Evento desconhecido.');
+    }
+    final grows = kind != 'reverse_split';
+    if (grows ? to <= from : to >= from) {
+      throw FormatException(switch (kind) {
+        'split' => 'No desdobramento você fica com mais ações: 1 para 2.',
+        'bonus' => 'Na bonificação você recebe ações novas.',
+        _ => 'No grupamento você fica com menos ações: 10 para 1.'
+      });
+    }
+    if (kind == 'bonus' && investment.foreign) {
+      throw const FormatException(
+          'Bonificação só para ativos em reais por enquanto.');
+    }
+    if (unitCostCents < 0 || (kind != 'bonus' && unitCostCents != 0)) {
+      throw const FormatException('Custo da ação nova inválido.');
+    }
+    final held = heldOn(day);
+    if (held == 0) throw const FormatException('Não havia posição nessa data.');
+    final units = eventUnits(held, from: from, to: to);
+    if (units == 0) {
+      throw const FormatException('A proporção não muda a quantidade.');
+    }
+    final op = InvestmentOperation(
+        id: id,
+        investmentId: investment.id,
+        kind: kind,
+        quantity: units,
+        cents: kind == 'bonus'
+            ? roundedRatio(units, unitCostCents, investmentScale)
+            : 0,
+        date: DateTime(day.year, day.month, day.day, 23, 59, 59),
+        createdAt: createdAt ?? DateTime.now(),
+        brlCents: investment.foreign ? 0 : null);
+    InvestmentPosition(investment, [...operations, op]);
+    return op;
+  }
 }

@@ -540,6 +540,29 @@ await test('investments, loans, money lent, assets and wishlist', async () => {
   await act(q, 'update_investment_price', { investment_id: 'inv1', price: 1.2 }, everything);
   assert.deepEqual(q.items.at(-1).args, { investment_id: 'inv1', price_cents: 120, date: null });
 
+  // Corporate events (C2): the app counts the units; here only the request.
+  await act(q, 'record_investment_event', { investment_id: 'inv1', event: 'split', date: '2026-10-10', from: 1, to: 2 }, everything);
+  assert.deepEqual(q.items.at(-1).args, { investment_id: 'inv1', event: 'split', date: '2026-10-10', from: 1, to: 2 });
+  await act(q, 'record_investment_event', { investment_id: 'inv1', event: 'bonus', date: '2026-10-10', percent: 10, unit_cost: 3 }, everything);
+  assert.deepEqual(q.items.at(-1).args, { investment_id: 'inv1', event: 'bonus', date: '2026-10-10', percent: 10, unit_cost_cents: 300 });
+  for (const bad of [
+    { event: 'split', from: 2, to: 1 }, { event: 'reverse_split', from: 1, to: 10 }, { event: 'split', from: 1, to: 2.5 },
+    { event: 'bonus', percent: 10 }, { event: 'bonus', percent: 10, unit_cost: 3, from: 1 }, { event: 'split', from: 1, to: 2, percent: 5 },
+  ]) {
+    await assert.rejects(act(q, 'record_investment_event', { investment_id: 'inv1', date: '2026-10-10', ...bad }, everything), ToolInputError, JSON.stringify(bad));
+  }
+  const { minBuildFor: eventBuild } = await import('../supabase/functions/nexo-mcp/queue.ts');
+  assert.equal(eventBuild('investment.event', q.items.at(-1).args), 61, 'an older database refuses the kind');
+  const { position } = await import('../supabase/functions/nexo-mcp/portfolio.ts');
+  const row = (id, kind, units, cents, day) => ({ id, investment_id: 'x', kind, quantity: units * 1e6, cents, date: `2026-03-0${day}T15:00:00.000Z`, created_at: '' });
+  const asset = { id: 'x', currency: 'BRL', price_micros: 10e6 };
+  const split = position(asset, [row('a', 'buy', 100, 100000, 1), row('b', 'split', 100, 0, 2)]);
+  assert.deepEqual([split.quantity, split.cost], [200e6, 100000]);
+  const grouped = position(asset, [row('a', 'buy', 105, 105000, 1), row('b', 'reverse_split', 94.5, 0, 2), row('c', 'sell', 0.5, 4000, 3)]);
+  assert.deepEqual([grouped.quantity, grouped.cost, grouped.realized], [10e6, 100000, -1000]);
+  const bonus = position(asset, [row('a', 'buy', 100, 100000, 1), row('b', 'bonus', 10, 3000, 2)]);
+  assert.deepEqual([bonus.quantity, bonus.cost], [110e6, 103000]);
+
   const loans = await act(q, 'get_loans', {}, everything);
   assert.deepEqual([loans.loans[0].paid, loans.loans[0].payments, loans.loans[0].skipped], [100, 1, 1]);
   await act(q, 'pay_loan_installment', { id: 'loan1', amount: 110 }, everything);

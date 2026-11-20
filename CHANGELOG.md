@@ -25,7 +25,10 @@
 - **Editar dados do ativo:** nome, código e corretora, sem mexer em quantidade nem dinheiro. Um ativo sem corretora comprado com uma conta do tipo Corretora passa a mostrar o nome dela.
 - **Cotação do dia com o app fechado:** uma vez por dia, depois das 18h, a checagem em segundo plano busca o fechamento de cada ativo com código (B3 e EUA, quando configurados). Cada preço guarda a data da cotação, mostrada na carteira.
 - Os feriados da B3 foram conferidos até 2026; um teste avisa quando o ano virar sem nova conferência. O prazo vigente é D+2; a B3 anunciou D+1 para fevereiro de 2028, ainda sem data final.
+- **Desdobramento, grupamento e bonificação** ("Evento da empresa" no ativo): a quantidade sai do que havia no fim da data com e nenhuma conta muda. Desdobramento e grupamento mantêm o custo total (o preço médio se ajusta); a bonificação soma o custo por ação nova do fato relevante e não conta como aporte. A fração de um grupamento é registrada como venda quando o dinheiro cair. Bonificação, por enquanto, só em ativos em reais.
+- **Schema 31:** a tabela de operações de investimento é reconstruída para aceitar os eventos (o SQLite não amplia uma regra existente). Mesmas colunas e linhas, comparadas linha a linha antes de a tabela antiga sair, com os gatilhos de sincronização de volta, tudo numa transação. Conferido numa cópia do banco real do PC (29 → 31, todas as linhas iguais, integridade ok). Um aparelho em versão anterior não aplica um evento vindo de outro: atualize os dois juntos.
 ### Conector
+- `record_investment_event`: desdobramento, grupamento ou bonificação (exige esta versão do app).
 - `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
 - `update_investment`: corrige nome, código e corretora de um ativo. `add_account` aceita o tipo `broker` (Corretora).
 - `simulate_cash` (só leitura): a mesma simulação da tela Simular. `update_account` aceita `interest_monthly_percent` (exige esta versão do app).
