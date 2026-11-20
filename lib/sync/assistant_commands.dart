@@ -533,7 +533,11 @@ class AssistantCommands {
             endDate:
                 a['end_date'] == null ? null : _day(a['end_date'] as String?),
             recurringType: a['kind'] as String? ?? 'subscription',
-            iofPercent: (a['iof_percent'] as num?)?.toDouble()));
+            iofPercent: (a['iof_percent'] as num?)?.toDouble(),
+            splitWith: a['split_with'] == null
+                ? null
+                : AppProvider.splitNames(
+                    List<String>.from(a['split_with'] as List))));
         return {'recurring_id': id, 'message': 'Recorrente cadastrada.'};
       case 'recurring.update':
         final r = _recurring(a['id']);

@@ -69,7 +69,7 @@ Legenda: **ok** cobre o que a tela faz, com os mesmos números e as mesmas regra
 | Categorias: juntar | merge_categories | ok | dry_run |
 | Subcategorias | update_transaction, update_transactions | ok | no app a subcategoria é texto do lançamento |
 | Recorrentes: ver, efetivar, pular | get_recurring, pay_recurring, skip_recurring | ok | valor real diferente do previsto; 1.19: `transaction_id` liga a ocorrência a um lançamento que já existe ("Já foi paga") |
-| Recorrentes: criar, alterar, excluir | add_recurring, update_recurring, delete_recurring | ok | frequência, tipo, observação, lembrete, sem fim, IOF de compra internacional (`iof_percent`, 1.19) |
+| Recorrentes: criar, alterar, excluir | add_recurring, update_recurring, delete_recurring | ok | frequência, tipo, observação, lembrete, sem fim, IOF de compra internacional (`iof_percent`, 1.19), divisão com pessoas (`split_with`, 1.19) |
 | Agenda: contas a vencer | get_upcoming_bills, get_cash_projection | ok | 1.19: `safe_per_day` (quanto dá por dia sem ficar negativo) e `daily_spending` (média de 4 semanas ou valor por dia), iguais à Agenda; casos em `test/fixtures/forecast_cases.json` |
 | Investir: carteira | get_investment_summary, get_investments | ok | operações com id; em reais, com `by_institution`, `by_currency`, `by_country` |
 | Investir: cadastrar, operar, preço, corrigir dados | add_investment, record_investment_operation, update_investment_price, update_investment | ok | 1.19: nome, código e corretora; a corretora vem da conta do tipo Corretora usada na compra |

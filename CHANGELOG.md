@@ -19,6 +19,7 @@
 - **Limite sugerido no formulário:** a mediana do gasto real dos 3 últimos meses fechados da categoria (sem gasto pontual, neutro ou pendente), arredondada para cima. Um toque preenche; nunca é aplicado sozinho. O Claude vê o mesmo número em `get_budgets` (`suggested`).
 - **Orçamento por subcategoria:** um limite só para Delivery, por exemplo, que também conta no de Alimentação. Os totais não somam duas vezes. O Claude cria com `set_budget` e `subcategory`.
 - **Delivery ou Mercado pelo nome do estabelecimento:** ao confirmar um movimento do banco em Alimentação sem subcategoria, o campo já vem preenchido quando o nome deixa claro (iFood, Rappi, supermercado, atacadão…; Mercado Pago e Mercado Livre não contam). "Classificar antigos" no orçamento de Alimentação mostra quantos e quais antes de mudar.
+- **Assinatura dividida:** "Dividir com" na recorrente (despesa fixa). A cada pagamento, a sua parte fica como gasto e a de cada pessoa vira "a receber", na mesma gravação, em partes iguais (você fica com os centavos que sobram). Pagar duas vezes a mesma ocorrência não duplica nada. Parcelamento não se divide.
 ### Investir
 - **Liquidação na B3:** comprar ou vender ações, FIIs e ETFs em reais com conta vinculada cria o movimento de caixa como **pendente**, com vencimento no dia útil da liquidação (D+2, contando feriados). Pendente não mexe no saldo. No dia, ao abrir o app, ele vira pago sozinho e o saldo se move uma única vez, mesmo com dois aparelhos. A previsão de caixa já mostra o movimento no dia certo. Renda fixa, proventos e ativos no exterior continuam imediatos. Operação registrada depois da liquidação já entra paga.
 - **Conta do tipo Corretora:** nasce fora do saldo total (dá para mudar), entra no patrimônio e aparece em Investir como "Caixa na corretora". Investir também mostra o que está aguardando liquidação.
@@ -29,6 +30,7 @@
 - **Schema 31:** a tabela de operações de investimento é reconstruída para aceitar os eventos (o SQLite não amplia uma regra existente). Mesmas colunas e linhas, comparadas linha a linha antes de a tabela antiga sair, com os gatilhos de sincronização de volta, tudo numa transação. Conferido numa cópia do banco real do PC (29 → 31, todas as linhas iguais, integridade ok). Um aparelho em versão anterior não aplica um evento vindo de outro: atualize os dois juntos.
 ### Conector
 - `record_investment_event`: desdobramento, grupamento ou bonificação (exige esta versão do app).
+- `add_recurring` e `update_recurring` aceitam `split_with` (pessoas com quem a assinatura é dividida); `get_recurring` mostra quem divide (exige esta versão do app).
 - `get_cash_projection` devolve `safe_per_day` e aceita `daily_spending` (`"average"` ou um valor por dia).
 - `update_investment`: corrige nome, código e corretora de um ativo. `add_account` aceita o tipo `broker` (Corretora).
 - `simulate_cash` (só leitura): a mesma simulação da tela Simular. `update_account` aceita `interest_monthly_percent` (exige esta versão do app).

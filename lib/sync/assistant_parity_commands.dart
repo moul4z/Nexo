@@ -519,6 +519,12 @@ class AssistantParityCommands {
           }
           next.iofPercent = iof == 0 ? null : iof;
         }
+        if (a.containsKey('split_with')) {
+          final people = a['split_with'] as List?;
+          next.splitWith = people == null || people.isEmpty
+              ? []
+              : AppProvider.splitNames(List<String>.from(people));
+        }
         if (a['reminder_enabled'] != null) {
           next.reminderEnabled = a['reminder_enabled'] as bool;
         }

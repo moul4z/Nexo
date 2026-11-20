@@ -1,4 +1,5 @@
 // lib/models/models.dart
+import 'dart:convert';
 
 class Account {
   final String id;
@@ -371,6 +372,27 @@ class RecurringPayment {
   /// changes by decree; never fixed in the code). Null: not abroad.
   double? iofPercent;
 
+  /// People the subscription is split with, equally (this person keeps the
+  /// odd cents). Each payment creates their parts as "a receber".
+  List<String> splitWith;
+
+  /// The parts of one occurrence of [amount], in cents: (each person, mine).
+  (int each, int mine) splitParts() {
+    final total = (amount * 100).round();
+    final each = total ~/ (splitWith.length + 1);
+    return (each, total - each * splitWith.length);
+  }
+
+  static List<String> _decodeSplit(Object? raw) {
+    if (raw is! String || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw);
+      return list is List ? [for (final n in list) '$n'] : [];
+    } on FormatException {
+      return [];
+    }
+  }
+
   /// What the forecast counts for one occurrence: the bank charges the
   /// purchase and, a day or two later, the IOF on it.
   double get forecastAmount {
@@ -399,7 +421,8 @@ class RecurringPayment {
     this.notes = '',
     this.recurringType = 'subscription',
     this.iofPercent,
-  });
+    List<String>? splitWith,
+  }) : splitWith = splitWith ?? [];
 
   // Inclusive count: first → last
   int? get totalPayments {
@@ -489,6 +512,7 @@ class RecurringPayment {
         'notes': notes,
         'recurring_type': recurringType,
         'iof_percent': iofPercent,
+        'split_json': splitWith.isEmpty ? null : jsonEncode(splitWith),
       };
 
   static RecurringPayment fromMap(Map<String, dynamic> m,
@@ -522,6 +546,7 @@ class RecurringPayment {
         notes: (m['notes'] as String?) ?? '',
         recurringType: (m['recurring_type'] as String?) ?? 'subscription',
         iofPercent: (m['iof_percent'] as num?)?.toDouble(),
+        splitWith: _decodeSplit(m['split_json']),
       );
 }
 

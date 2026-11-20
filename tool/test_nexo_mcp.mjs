@@ -453,6 +453,18 @@ await test('recurring: create, update and delete validate before queueing', asyn
   assert.equal(minBuildFor('recurring.add', q.items[0].args), null, 'without IOF any app applies it');
   await act(q, 'update_recurring', { id: 'stream', iof_percent: null }, richer);
   assert.deepEqual([q.items.at(-1).kind, q.items.at(-1).args], ['recurring.edit', { id: 'stream', iof_percent: null }]);
+  // A subscription split with people (6.4 b): names cleaned, only a fixed expense.
+  await act(q, 'add_recurring', { name: 'Streaming', type: 'expense', amount: 55.9, account_id: 'bank', category_id: 'health',
+    first_date: '2026-11-05', split_with: [' Pessoa A', 'Pessoa B', 'Pessoa A', ''] }, richer);
+  assert.deepEqual(q.items.at(-1).args.split_with, ['Pessoa A', 'Pessoa B']);
+  assert.equal(minBuildFor('recurring.add', q.items.at(-1).args), 61, 'an older app would drop the split');
+  await act(q, 'update_recurring', { id: 'stream', split_with: null }, richer);
+  assert.deepEqual(q.items.at(-1).args, { id: 'stream', split_with: [] });
+  for (const bad of [{ split_with: 'Pessoa A' }, { split_with: Array.from({ length: 21 }, (_, i) => `P${i}`) },
+    { kind: 'installment', end_date: '2027-01-05', split_with: ['Pessoa A'] }, { amount: 0.05, split_with: Array.from({ length: 6 }, (_, i) => `P${i}`) }]) {
+    await assert.rejects(act(q, 'add_recurring', { name: 'X', type: 'expense', amount: 10, account_id: 'bank', category_id: 'health',
+      first_date: '2026-11-05', ...bad }, richer), ToolInputError, JSON.stringify(bad));
+  }
   await assert.rejects(act(q, 'add_recurring', { name: 'X', type: 'expense', amount: 10, account_id: 'bank', category_id: 'health',
     first_date: '2026-11-05', iof_percent: 40 }, richer), /entre 0 e 25/);
   // The forecast counts it: R$ 39,90 with 3,5% is R$ 41,30, in both the app and the connector.

@@ -414,7 +414,8 @@
         "early_reminder_enabled": 0,
         "notes": "",
         "recurring_type": "subscription",
-        "iof_percent": null
+        "iof_percent": null,
+        "split_json": null
       }
     ],
     "investments": [],

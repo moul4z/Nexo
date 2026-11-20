@@ -2001,6 +2001,13 @@ class AppProvider extends ChangeNotifier {
         await txn.rawUpdate(
             'UPDATE accounts SET balance = balance + ? WHERE id = ?',
             [_txDelta(tx), tx.accountId]);
+        // A subscription split with people: their parts become "a receber"
+        // in the same write, with ids from this occurrence (never twice).
+        if (r.splitWith.isNotEmpty &&
+            r.paymentType == 'expense' &&
+            r.recurringType != 'installment') {
+          await _splitIn(txn, tx.id, r.splitWith);
+        }
         if (suggestionId != null) {
           await DBHelper.confirmSuggestion(txn, suggestionId, tx.id);
         }
@@ -2035,6 +2042,7 @@ class AppProvider extends ChangeNotifier {
     recurring = await DBHelper.getRecurring();
     recurringHistoryCount = await DBHelper.getRecurringHistoryCount();
     await _reloadLedger();
+    if (expected.splitWith.isNotEmpty) await _reloadLended();
     if (expected.reminderEnabled) await _notif.cancelReminder(expected.id);
     final updated = recurring.where((r) => r.id == expected.id).firstOrNull;
     if (updated != null &&
@@ -2158,80 +2166,91 @@ class AppProvider extends ChangeNotifier {
   /// stays on the same account as a neutral entry, so the balance and the
   /// card's invoice do not change, and each person owes their part.
   Future<void> splitBill(String id, List<String> people) async {
+    final db = await DBHelper.database;
+    await ledgerTransaction(
+        db, 'transaction.split_bill', (txn) => _splitIn(txn, id, people));
+    await _reloadLedger();
+    await _reloadLended();
+  }
+
+  /// The people a split names: trimmed, without repeats, 1 to 20.
+  static List<String> splitNames(List<String> people) {
     final names = {for (final n in people) n.trim(): true}.keys.toList()
       ..removeWhere((n) => n.isEmpty);
     if (names.isEmpty || names.length > 20) {
       throw ArgumentError('Informe de 1 a 20 pessoas.');
     }
+    return names;
+  }
+
+  /// [splitBill] inside a write that is already open: a recurring paid with
+  /// its split runs it in the same transaction as the payment.
+  Future<void> _splitIn(
+      DatabaseExecutor txn, String id, List<String> people) async {
+    final names = splitNames(people);
     final rest = '$id:shared';
-    final db = await DBHelper.database;
-    await ledgerTransaction(db, 'transaction.split_bill', (txn) async {
-      await _requirePlain(txn, [id]);
-      final t = (await _stored(txn, [id])).single;
-      final meta = await _metaIn(txn, id);
-      if (t.type != 'expense')
-        throw StateError('Só despesa pode ser dividida.');
-      if (meta.isPending) throw StateError('Pague a despesa antes de dividir.');
-      if (meta.source == 'opening_balance' ||
-          meta.excludeFromSpending ||
-          meta.installmentTotal != null) {
-        throw StateError('Este lançamento não pode ser dividido.');
-      }
-      if ((await txn.query('transactions', where: 'id = ?', whereArgs: [rest]))
-          .isNotEmpty) {
-        throw StateError('Esta despesa já foi dividida.');
-      }
-      final total = (t.amount * 100).round();
-      final each = total ~/ (names.length + 1);
-      if (each == 0) throw StateError('O valor não dá para tantas pessoas.');
-      final others = each * names.length;
-      final mine = t.copyWith(amount: (total - others) / 100);
-      final shared = AppTransaction(
-          id: rest,
-          type: 'expense',
-          amount: others / 100,
-          description: 'Rateio · ${t.description}',
-          accountId: t.accountId,
-          categoryId: t.categoryId,
-          date: t.date,
-          note: 'A receber de ${names.join(', ')}.',
-          currency: t.currency);
-      await txn.update('transactions', mine.toMap(),
-          where: 'id = ?', whereArgs: [id]);
-      await txn.insert('transactions', shared.toMap());
-      await txn.insert(
-          'transaction_metadata',
-          TransactionMetadata(
-                  transactionId: rest,
-                  excludeFromSpending: true,
-                  source: 'shared_bill:$id')
-              .toMap());
-      for (var i = 0; i < names.length; i++) {
-        final found = await txn.query('lended_people',
-            where: 'LOWER(name) = ?', whereArgs: [names[i].toLowerCase()]);
-        var personId = found.isEmpty ? null : found.first['id'] as String;
-        if (personId == null) {
-          personId = 'shared-person:$id:$i';
-          await txn.insert(
-              'lended_people',
-              LendedPerson(id: personId, name: names[i], colorValue: 0xFF6366F1)
-                  .toMap());
-        }
-        // No account: the money left with the bill, not with this entry.
+    await _requirePlain(txn, [id]);
+    final t = (await _stored(txn, [id])).single;
+    final meta = await _metaIn(txn, id);
+    if (t.type != 'expense') throw StateError('Só despesa pode ser dividida.');
+    if (meta.isPending) throw StateError('Pague a despesa antes de dividir.');
+    if (meta.source == 'opening_balance' ||
+        meta.excludeFromSpending ||
+        meta.installmentTotal != null) {
+      throw StateError('Este lançamento não pode ser dividido.');
+    }
+    if ((await txn.query('transactions', where: 'id = ?', whereArgs: [rest]))
+        .isNotEmpty) {
+      throw StateError('Esta despesa já foi dividida.');
+    }
+    final total = (t.amount * 100).round();
+    final each = total ~/ (names.length + 1);
+    if (each == 0) throw StateError('O valor não dá para tantas pessoas.');
+    final others = each * names.length;
+    final mine = t.copyWith(amount: (total - others) / 100);
+    final shared = AppTransaction(
+        id: rest,
+        type: 'expense',
+        amount: others / 100,
+        description: 'Rateio · ${t.description}',
+        accountId: t.accountId,
+        categoryId: t.categoryId,
+        date: t.date,
+        note: 'A receber de ${names.join(', ')}.',
+        currency: t.currency);
+    await txn
+        .update('transactions', mine.toMap(), where: 'id = ?', whereArgs: [id]);
+    await txn.insert('transactions', shared.toMap());
+    await txn.insert(
+        'transaction_metadata',
+        TransactionMetadata(
+                transactionId: rest,
+                excludeFromSpending: true,
+                source: 'shared_bill:$id')
+            .toMap());
+    for (var i = 0; i < names.length; i++) {
+      final found = await txn.query('lended_people',
+          where: 'LOWER(name) = ?', whereArgs: [names[i].toLowerCase()]);
+      var personId = found.isEmpty ? null : found.first['id'] as String;
+      if (personId == null) {
+        personId = 'shared-person:$id:$i';
         await txn.insert(
-            'lended_money',
-            LendedMoney(
-                    id: 'shared:$id:$i',
-                    personId: personId,
-                    amount: each / 100,
-                    type: 'lent',
-                    date: t.date,
-                    notes: 'Rateio · ${t.description}')
+            'lended_people',
+            LendedPerson(id: personId, name: names[i], colorValue: 0xFF6366F1)
                 .toMap());
       }
-    });
-    await _reloadLedger();
-    await _reloadLended();
+      // No account: the money left with the bill, not with this entry.
+      await txn.insert(
+          'lended_money',
+          LendedMoney(
+                  id: 'shared:$id:$i',
+                  personId: personId,
+                  amount: each / 100,
+                  type: 'lent',
+                  date: t.date,
+                  notes: 'Rateio · ${t.description}')
+              .toMap());
+    }
   }
 
   /// [l] was repaid into [accountId]: the money comes in as neutral, since

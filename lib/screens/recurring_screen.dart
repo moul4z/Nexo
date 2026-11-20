@@ -751,6 +751,38 @@ class _RecurringEditorState extends State<_RecurringEditor> {
   final _installmentsCtrl = TextEditingController(text: '12');
   final _notesCtrl = TextEditingController();
   final _iofCtrl = TextEditingController();
+  final _splitCtrl = TextEditingController();
+
+  List<String> get _split => [
+        for (final n in _splitCtrl.text.split(','))
+          if (n.trim().isNotEmpty) n.trim()
+      ];
+
+  /// Each one's part of the typed amount, so the split is seen before it
+  /// is saved.
+  String _splitHelp() {
+    final names = _split;
+    final amount = parseMoney(_amountCtrl.text);
+    if (names.isEmpty || amount == null || amount <= 0) {
+      return 'A cada pagamento, a parte de cada pessoa vira "a receber". Você fica com os centavos que sobrarem.';
+    }
+    final (each, mine) = RecurringPayment(
+            id: '',
+            name: '',
+            accountId: '',
+            categoryId: '',
+            amount: amount,
+            freqVal: 1,
+            freqUnit: 'months',
+            startDate: _firstDate,
+            nextDate: _firstDate,
+            splitWith: names)
+        .splitParts();
+    final currency =
+        context.read<AppProvider>().accountById(_accountId ?? '')?.currency ??
+            'BRL';
+    return '${names.length + 1} partes: ${formatAmount(each / 100, currency)} de cada pessoa a receber; a sua fica em ${formatAmount(mine / 100, currency)}.';
+  }
 
   /// Empty or zero: not a purchase abroad.
   double? get _iof {
@@ -815,6 +847,7 @@ class _RecurringEditorState extends State<_RecurringEditor> {
       if (e.iofPercent != null) {
         _iofCtrl.text = '${e.iofPercent}'.replaceAll('.', ',');
       }
+      _splitCtrl.text = e.splitWith.join(', ');
       final parts = e.reminderTime.split(':');
       _reminderTime = TimeOfDay(
         hour: int.tryParse(parts.firstOrNull ?? '') ?? 9,
@@ -834,6 +867,7 @@ class _RecurringEditorState extends State<_RecurringEditor> {
     _installmentsCtrl.dispose();
     _notesCtrl.dispose();
     _iofCtrl.dispose();
+    _splitCtrl.dispose();
     super.dispose();
   }
 
@@ -916,6 +950,18 @@ class _RecurringEditorState extends State<_RecurringEditor> {
       return;
     }
 
+    final split = _type == 'expense' && _recurringType != 'installment'
+        ? _split
+        : <String>[];
+    if (split.length > 20 ||
+        (split.isNotEmpty &&
+            (amount * 100).round() ~/ (split.length + 1) == 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Revise a divisão: de 1 a 20 pessoas, com valor para todas.')));
+      return;
+    }
+
     setState(() => _saving = true);
     final app = context.read<AppProvider>();
     final existing = widget.existing;
@@ -946,6 +992,8 @@ class _RecurringEditorState extends State<_RecurringEditor> {
       earlyReminderEnabled: _reminder && _earlyReminder,
       notes: _notesCtrl.text.trim(),
       iofPercent: _type == 'expense' ? _iof : null,
+      splitWith:
+          _type == 'expense' && _recurringType != 'installment' ? _split : [],
     );
 
     try {
@@ -1274,6 +1322,22 @@ class _RecurringEditorState extends State<_RecurringEditor> {
                         prefixIcon: Icon(Icons.public_outlined),
                       ),
                     ),
+                    if (_recurringType != 'installment') ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        key: const ValueKey('recurring-split'),
+                        controller: _splitCtrl,
+                        textCapitalization: TextCapitalization.words,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          labelText: 'Dividir com (opcional)',
+                          hintText: 'Nomes separados por vírgula',
+                          helperText: _splitHelp(),
+                          helperMaxLines: 3,
+                          prefixIcon: const Icon(Icons.group_outlined),
+                        ),
+                      ),
+                    ],
                   ],
                   const SizedBox(height: 8),
                   TextField(

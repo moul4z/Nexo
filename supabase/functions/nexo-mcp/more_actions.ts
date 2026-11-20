@@ -39,6 +39,11 @@ const iofField = {
   description: "IOF de compra internacional, em %, para assinatura cobrada em outra moeda. A previsão soma o IOF a cada cobrança. " +
     "Confira a alíquota em vigor (muda por decreto); não chute.",
 };
+const splitField = {
+  type: "array", items: { type: "string", minLength: 1, maxLength: 80 }, maxItems: 20,
+  description: "Pessoas com quem a assinatura é dividida, em partes iguais (você fica com os centavos que sobram). " +
+    "A cada pagamento, a parte de cada uma vira \"a receber\". Só despesa fixa. Exige a versão 1.19 do app.",
+};
 
 export const readOnlyMore = new Set(["get_recurring", "get_budgets", "get_goals"]);
 
@@ -98,6 +103,7 @@ export const moreActions: (ToolDefinition & { destructive?: boolean })[] = [
         end_date: { ...dateField, description: "Última cobrança (parcelamentos)" },
         kind: { type: "string", enum: ["subscription", "installment"], description: "Padrão subscription (fixa)" },
         iof_percent: iofField,
+        split_with: splitField,
       },
       required: ["name", "type", "amount", "account_id", "category_id", "first_date"],
       additionalProperties: false,
@@ -127,6 +133,7 @@ export const moreActions: (ToolDefinition & { destructive?: boolean })[] = [
         reminder_enabled: { type: "boolean" },
         reminder_time: { type: "string", pattern: "^\\d{2}:\\d{2}$" },
         iof_percent: { ...iofField, type: ["number", "null"], description: iofField.description + " null ou 0 tira." },
+        split_with: { ...splitField, type: ["array", "null"], description: splitField.description + " Lista vazia ou null tira." },
       },
       required: ["id"],
       additionalProperties: false,
@@ -280,6 +287,32 @@ function dateArg(args: Args, key: string, required = false): string | undefined 
   }
   return v;
 }
+/// The people a recurring is split with, as the app stores them.
+export function splitOf(r: Row): string[] {
+  try {
+    const v = JSON.parse(text(r.split_json) || "[]");
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/// People a subscription is split with, as the app checks them: names
+/// trimmed, no repeats, 1 to 20; only a fixed expense; a part for everyone.
+function splitArg(args: Args, type: string, kind: string, amountCents: number): string[] | undefined {
+  const v = args.split_with;
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v) || v.some((n) => typeof n !== "string" || n.length > 80)) {
+    throw new ToolInputError("split_with deve ser uma lista de nomes.");
+  }
+  const names = [...new Set(v.map((n) => (n as string).trim()).filter(Boolean))];
+  if (!names.length) return [];
+  if (names.length > 20) throw new ToolInputError("split_with: de 1 a 20 pessoas.");
+  if (type !== "expense" || kind === "installment") throw new ToolInputError("Só uma despesa fixa (não parcelamento) pode ser dividida.");
+  if (Math.floor(amountCents / (names.length + 1)) === 0) throw new ToolInputError("O valor não dá para tantas pessoas.");
+  return names;
+}
+
 /// The IOF of a purchase abroad, only for an expense; 0 or absent: none.
 function iofArg(args: Args, type: string): number | undefined {
   const v = args.iof_percent;
@@ -428,6 +461,7 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
             every: `${num(r.freq_val) || 1} ${unitLabel[text(r.freq_unit)] ?? text(r.freq_unit)}`,
             kind: text(r.recurring_type) === "installment" ? "parcelamento" : "fixa/assinatura",
             iof_percent: num(r.iof_percent) > 0 ? num(r.iof_percent) : undefined,
+            split_with: splitOf(r).length ? splitOf(r) : undefined,
             account: text(find(l.accounts, r.account_id)?.name),
             account_id: text(r.account_id),
             category: text(find(l.categories, r.category_id)?.name),
@@ -469,7 +503,7 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
     }
     case "add_recurring": {
       only(args, ["name", "type", "amount", "account_id", "category_id", "frequency", "every", "first_date", "end_date", "kind",
-        "iof_percent"]);
+        "iof_percent", "split_with"]);
       const type = enumArg(args, "type", ["expense", "income"], "expense");
       const a = account(l, str(args, "account_id", 256));
       category(l, str(args, "category_id", 256), type);
@@ -482,19 +516,22 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
       if (end && end < first) throw new ToolInputError("end_date deve ser depois de first_date.");
       const kind = enumArg(args, "kind", ["subscription", "installment"], "subscription");
       if (kind === "installment" && !end) throw new ToolInputError("Parcelamento precisa de end_date.");
+      const total = amountCents(args)!;
+      const split = splitArg(args, type, kind, total);
       const q = await enqueue("recurring.add", {
-        name: str(args, "name", 80), type, amount_cents: amountCents(args), account_id: text(a.id),
+        name: str(args, "name", 80), type, amount_cents: total, account_id: text(a.id),
         category_id: args.category_id, freq_unit: unit[enumArg(args, "frequency", ["daily", "weekly", "monthly", "yearly"], "monthly")],
         freq_val: every, first_date: first, end_date: end ?? null, kind,
         ...(iofArg(args, type) ? { iof_percent: iofArg(args, type) } : {}),
+        ...(split?.length ? { split_with: split } : {}),
       });
       return pending(q.id, "Nova recorrente");
     }
     case "update_recurring": {
       only(args, ["id", "name", "amount", "account_id", "category_id", "next_date", "end_date", "frequency", "every", "kind",
-        "notes", "reminder_enabled", "reminder_time", "iof_percent"]);
+        "notes", "reminder_enabled", "reminder_time", "iof_percent", "split_with"]);
       const r = recurring(l, str(args, "id", 256));
-      const extended = ["frequency", "every", "kind", "notes", "reminder_enabled", "reminder_time", "iof_percent"]
+      const extended = ["frequency", "every", "kind", "notes", "reminder_enabled", "reminder_time", "iof_percent", "split_with"]
         .some((k) => args[k] !== undefined) || args.end_date === null;
       if (extended) {
         const body: Args = { id: text(r.id) };
@@ -534,6 +571,10 @@ export async function callMoreAction(name: string, rawArgs: unknown, l: Ledger, 
         }
         if (args.iof_percent !== undefined) {
           body.iof_percent = args.iof_percent === null ? null : iofArg(args, text(r.payment_type) || "expense") ?? null;
+        }
+        if (args.split_with !== undefined) {
+          body.split_with = splitArg(args, text(r.payment_type) || "expense", kind,
+            (body.amount_cents as number | undefined) ?? cents(num(r.amount))) ?? [];
         }
         return pending((await enqueue("recurring.edit", body)).id, "Alteração da recorrente");
       }
