@@ -70,10 +70,17 @@ class _TransferScreenState extends State<TransferScreen> {
             toAmount: received,
             note: _noteCtrl.text.trim(),
           );
-    } catch (_) {
+    } catch (e) {
+      // The app's own reason, when it has one (UX-08): never a silent fail.
+      final reason = switch (e) {
+        StateError(:final message) => message,
+        FormatException(:final message) => message,
+        ArgumentError(:final message) => '$message',
+        _ => null,
+      };
       if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text(
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(reason ??
                 'Não foi possível concluir. Confira a conta e o valor e tente novamente.')));
       return;
     } finally {
@@ -135,10 +142,12 @@ class _TransferScreenState extends State<TransferScreen> {
               AccountCardPicker(
                 accounts: transferable,
                 selectedId: _fromId,
+                // The amount typed stays (UX-08); only what arrived in
+                // another currency depends on the pair of accounts.
                 onSelected: (id) => setState(() {
                   _fromId = id;
                   if (_toId == id) _toId = null;
-                  _amtCtrl.clear();
+                  _receivedCtrl.clear();
                 }),
               ),
               const SizedBox(height: 14),
@@ -167,7 +176,7 @@ class _TransferScreenState extends State<TransferScreen> {
                           ? null
                           : () => setState(() {
                                 _toId = acc.id;
-                                _amtCtrl.clear();
+                                _receivedCtrl.clear();
                               }),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 100),

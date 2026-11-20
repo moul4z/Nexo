@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/auto_backup.dart';
+import '../services/diagnostics.dart';
 import '../services/file_output.dart';
 import '../database/db_helper.dart';
 import '../database/database_platform.dart';
@@ -110,7 +111,10 @@ class _BackupScreenState extends State<BackupScreen> {
       _msgOk = ok;
     });
     _msgTimer?.cancel();
-    _msgTimer = Timer(const Duration(seconds: 3), () {
+    // A path to note down, or what went wrong, cannot vanish in 3 s
+    // (UX-09): success stays a while, an error until the next action.
+    if (!ok) return;
+    _msgTimer = Timer(const Duration(seconds: 15), () {
       if (mounted) {
         setState(() => _msg = null);
       }
@@ -130,7 +134,13 @@ class _BackupScreenState extends State<BackupScreen> {
       }
       // null = user cancelled file picker — show nothing
     } catch (e) {
-      _setMsg(l10n.backup_backupFailed(e.toString()), ok: false);
+      // The system's text is in English and means little: plain words here,
+      // the detail in Diagnóstico.
+      Diagnostics.note('backup', e);
+      _setMsg(
+          l10n.backup_backupFailed(
+              'escolha outra pasta e tente de novo; seus dados não mudaram'),
+          ok: false);
     } finally {
       if (mounted) setState(() => _backingUp = false);
     }
@@ -265,7 +275,7 @@ class _BackupScreenState extends State<BackupScreen> {
               builder: (context, snapshot) => Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: SelectableText(
-                      'Banco local neste computador:\n${snapshot.data ?? 'Carregando caminho…'}\nBackups e relatórios são salvos na pasta escolhida por você. Não há sincronização com o celular.')),
+                      'Banco local neste computador:\n${snapshot.data ?? 'Carregando caminho…'}\nBackups e relatórios são salvos na pasta escolhida por você. Com a sincronização ligada, o celular e este computador têm o mesmo acervo; o backup é uma cópia só deste aparelho.')),
             ),
           // ── What's included ────────────────────────────────────────────
           Row(children: [

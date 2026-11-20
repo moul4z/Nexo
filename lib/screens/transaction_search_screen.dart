@@ -211,10 +211,18 @@ class _TransactionSearchScreenState extends State<TransactionSearchScreen> {
                   context,
                   MaterialPageRoute(
                       builder: (_) => const AddTransactionScreen()))),
+          // A filter left on hides entries: the button says so (UX-07).
           IconButton(
-              tooltip: 'Filtros',
+              tooltip: _filter.count == 0
+                  ? 'Filtros'
+                  : 'Filtros (${_filter.count} ativo${_filter.count == 1 ? '' : 's'})',
               onPressed: _filters,
-              icon: const Icon(Icons.filter_alt_outlined))
+              icon: Badge(
+                  isLabelVisible: _filter.count > 0,
+                  label: Text('${_filter.count}'),
+                  child: Icon(_filter.count == 0
+                      ? Icons.filter_alt_outlined
+                      : Icons.filter_alt)))
         ],
         title: Text('Extrato', style: TextStyle(fontWeight: FontWeight.w600)),
       ),
@@ -222,6 +230,7 @@ class _TransactionSearchScreenState extends State<TransactionSearchScreen> {
         builder: (context) {
           final meta = app.transactionMetadata;
           final searching = _query.trim().isNotEmpty;
+          final searchedCents = TransactionFilter.searchedCents(_query);
           final month = _month;
           final filtered = transactions.where((tx) {
             if (!searching &&
@@ -237,7 +246,10 @@ class _TransactionSearchScreenState extends State<TransactionSearchScreen> {
             final account = app.accountById(tx.accountId)?.name ?? '';
             final category = app.categoryLabel(tx);
             final subcategory = meta[tx.id]?.subcategory ?? '';
-            return tx.description.toLowerCase().contains(q) ||
+            // "55,90" finds the entries of that amount (UX-06).
+            return (searchedCents != null &&
+                    (tx.amount * 100).round() == searchedCents) ||
+                tx.description.toLowerCase().contains(q) ||
                 tx.note.toLowerCase().contains(q) ||
                 account.toLowerCase().contains(q) ||
                 category.toLowerCase().contains(q) ||

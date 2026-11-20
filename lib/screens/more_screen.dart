@@ -66,8 +66,9 @@ class MoreScreen extends StatelessWidget {
           screen: MonthReviewScreen()),
       const _Item(
           icon: Icons.inbox_outlined,
-          label: 'Sugestões de lançamentos',
-          sub: 'Revisar notificações financeiras, sem registro automático',
+          label: 'Para revisar',
+          sub:
+              'Movimentos dos bancos: o que o app resolveu e o que espera você',
           screen: NotificationInboxScreen()),
       const _Item(
           icon: Icons.event_note,
@@ -173,7 +174,7 @@ class MoreScreen extends StatelessWidget {
             'Mês em revisão',
           ],
           'Organizar e proteger': [
-            'Sugestões de lançamentos',
+            'Para revisar',
             'Conferir com o banco',
             'Importar extrato',
             'Exportar relatório',
