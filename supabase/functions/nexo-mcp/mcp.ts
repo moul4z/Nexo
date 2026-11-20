@@ -78,7 +78,14 @@ export const instructions =
   "Vários lançamentos de uma vez (itens de um print ou extrato): add_transactions, primeiro com dry_run para mostrar a lista e os " +
   "possible_duplicates; se um item parecer já lançado, pergunte antes. O celular grava mesmo com o app fechado (em segundos " +
   "com o aviso do servidor, ou em até 15 minutos); get_request_status mostra a última conferência de cada aparelho. " +
-  "Não peça para a pessoa abrir o app, a não ser que o pedido espere há mais de 20 minutos ou espere uma atualização.";
+  "Não peça para a pessoa abrir o app, a não ser que o pedido espere há mais de 20 minutos ou espere uma atualização. " +
+  // What changed in the app, so a conversation that used the old rules knows.
+  "Novidades do app 1.19 (20/11/2026): assinatura dividida com pessoas (split_with em add_recurring e update_recurring; a cada " +
+  "pagamento só a parte da pessoa dona conta como gasto e a de cada um vira 'a receber'); um Pix de quem deve uma parte aparece " +
+  "em list_suggestions com resolution receivable e quita essa parte, não é renda; desdobramento, grupamento e bonificação com " +
+  "record_investment_event; recorrente com iof_percent para assinatura cobrada no exterior; compra e venda de ações, FIIs e ETFs " +
+  "com conta vinculada ficam pendentes até a liquidação (2 dias úteis) e não mexem no saldo antes; conta do tipo broker " +
+  "(Corretora); get_cash_projection traz safe_per_day (quanto dá para gastar por dia sem o saldo ficar negativo).";
 
 type Json = Record<string, unknown>;
 const rpcError = (id: unknown, code: number, message: string) => ({

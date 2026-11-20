@@ -30,6 +30,7 @@
 - **Desdobramento, grupamento e bonificação** ("Evento da empresa" no ativo): a quantidade sai do que havia no fim da data com e nenhuma conta muda. Desdobramento e grupamento mantêm o custo total (o preço médio se ajusta); a bonificação soma o custo por ação nova do fato relevante e não conta como aporte. A fração de um grupamento é registrada como venda quando o dinheiro cair. Bonificação, por enquanto, só em ativos em reais.
 - **Schema 31:** a tabela de operações de investimento é reconstruída para aceitar os eventos (o SQLite não amplia uma regra existente). Mesmas colunas e linhas, comparadas linha a linha antes de a tabela antiga sair, com os gatilhos de sincronização de volta, tudo numa transação. Conferido numa cópia do banco real do PC (29 → 31, todas as linhas iguais, integridade ok). Um aparelho em versão anterior não aplica um evento vindo de outro: atualize os dois juntos.
 ### Conector
+- As instruções do conector listam as novidades desta versão, para uma conversa que já usava o Nexo saber o que mudou.
 - `record_investment_event`: desdobramento, grupamento ou bonificação (exige esta versão do app).
 - `add_recurring` e `update_recurring` aceitam `split_with` (pessoas com quem a assinatura é dividida); `get_recurring` mostra quem divide (exige esta versão do app).
 - `list_suggestions` reconhece a parte paga de volta pelo Pix (`receivable`, com a pessoa e o valor), pela mesma regra do app (casos P1–P9 em `reconcile_cases.json`).
