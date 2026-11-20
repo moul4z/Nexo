@@ -133,9 +133,11 @@ class SupabaseAuth {
           if (bearer != null) 'Authorization': 'Bearer $bearer',
         })
         ..body = jsonEncode(body);
-      final response =
-          await http.Response.fromStream(await client.send(request))
-              .timeout(timeout);
+      // The limit covers connecting too: a stuck network used to hang in
+      // send() and freeze the sync behind a token refresh (SYNC-06).
+      final response = await (() async =>
+              http.Response.fromStream(await client.send(request)))()
+          .timeout(timeout);
       if (response.statusCode == 429) {
         throw const SyncAuthException(
             'Muitas tentativas. Aguarde alguns minutos antes de pedir outro código.');

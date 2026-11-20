@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
@@ -15,6 +16,7 @@ import 'sync_activation.dart';
 import 'supabase_sync_transport.dart';
 import 'sync_config.dart';
 import 'sync_lab_check.dart';
+import 'sync_protocol.dart' show SyncUnavailable;
 import '../services/diagnostics.dart';
 
 /// A safety step stopped activation or verification; [message] is for people.
@@ -89,6 +91,9 @@ class SyncController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   bool bound = false, running = false;
+
+  /// The last failed pass was a network or server outage, not an error.
+  bool offline = true;
   LedgerSyncStatus? status;
   DateTime? lastSuccess;
   int pending = 0;
@@ -230,6 +235,22 @@ class SyncController extends ChangeNotifier with WidgetsBindingObserver {
           Diagnostics.note('sync', e);
           // Requests stay queued on the server; the next pass retries.
         }
+        // What that wrote (a request applied, a bank movement registered)
+        // goes out in this pass, not 15 minutes later (SYNC-04).
+        final mid = await engine.cursor;
+        for (var round = 0;
+            round < 3 && await engine.pendingCount > 0;
+            round++) {
+          final next = await engine.synchronize();
+          if (next != LedgerSyncStatus.idle &&
+              next != LedgerSyncStatus.progressed) {
+            status = next;
+            break;
+          }
+        }
+        if (await engine.cursor != mid) await reload();
+        pending = await engine.pendingCount;
+        conflicts = await engine.conflicts();
       }
     } catch (e) {
       Diagnostics.note('sync', e);
@@ -238,6 +259,9 @@ class SyncController extends ChangeNotifier with WidgetsBindingObserver {
       status = isNewerSchemaError(e)
           ? LedgerSyncStatus.updateRequired
           : LedgerSyncStatus.retryLater;
+      // Only a network or server outage is "sem conexão" (SYNC-08).
+      offline =
+          e is SyncUnavailable || e is SocketException || e is TimeoutException;
     } finally {
       running = false;
       notifyListeners();
@@ -249,8 +273,9 @@ class SyncController extends ChangeNotifier with WidgetsBindingObserver {
         LedgerSyncStatus.idle || LedgerSyncStatus.progressed => pending == 0
             ? 'Sincronizado'
             : '$pending alteração(ões) aguardando envio',
-        LedgerSyncStatus.retryLater =>
-          'Sem conexão com o servidor. $pending alteração(ões) aguardando; tudo continua salvo neste aparelho.',
+        LedgerSyncStatus.retryLater => offline
+            ? 'Sem conexão com o servidor. $pending alteração(ões) aguardando; tudo continua salvo neste aparelho.'
+            : 'A sincronização encontrou um erro e vai tentar de novo (detalhe em Diagnóstico). $pending alteração(ões) aguardando; tudo continua salvo neste aparelho.',
         LedgerSyncStatus.conflict =>
           '${conflicts.length} conflito(s) precisam da sua decisão.',
         LedgerSyncStatus.paused =>

@@ -24,6 +24,9 @@ class _Lab {
   final epochs = <String, String>{};
   final real = <String>{};
   bool offline = false;
+
+  /// The server answers with something that is not a network failure.
+  bool broken = false;
 }
 
 class _Remote implements SyncRemote {
@@ -32,6 +35,7 @@ class _Remote implements SyncRemote {
   final String id;
   void _online() {
     if (lab.offline) throw const SyncUnavailable();
+    if (lab.broken) throw StateError('resposta inesperada');
   }
 
   @override
@@ -280,6 +284,7 @@ void main() {
     expect(pc.status, LedgerSyncStatus.retryLater);
     expect(pc.pending, 1);
     expect(pc.summary, contains('aguardando'));
+    expect(pc.summary, startsWith('Sem conexão'));
     expect((await DBHelper.getAccounts()).single.balance, 980,
         reason: 'local work never waits for the network');
     lab.offline = false;
@@ -288,6 +293,75 @@ void main() {
     await pc.syncNow();
     expect(pc.pending, 0);
     expect(pc.summary, 'Sincronizado');
+    pc.dispose();
+  });
+
+  test('an error that is not the network is not called "sem conexão"',
+      () async {
+    await pair();
+    final pc = controller();
+    await pc.start();
+    await pc.idle;
+    lab.broken = true;
+    await pc.syncNow();
+    expect(pc.status, LedgerSyncStatus.retryLater);
+    expect(pc.summary, startsWith('A sincronização encontrou um erro'));
+    expect(pc.summary, contains('tudo continua salvo'));
+    lab.broken = false;
+    pc.dispose();
+  });
+
+  test('what runs after the sync is sent in the same pass (SYNC-04)', () async {
+    await pair();
+    final pc = SyncController(
+        remote: (id) => _Remote(lab, id),
+        reload: () async => reloads++,
+        // No second pass from the commit: only the same pass can send it.
+        debounce: const Duration(hours: 1),
+        interval: const Duration(hours: 1));
+    var ran = false;
+    pc.afterSync = () async {
+      if (ran) return;
+      ran = true;
+      await (await provider()).addTransaction(expense('from-queue', 5));
+    };
+    final before = await lab.servers.values.single.revision;
+    await pc.start(); // one pass: receive, run the queue, send what it wrote
+    await pc.idle;
+    expect(ran, isTrue);
+    expect(pc.pending, 0, reason: 'sent before the pass ended');
+    expect(await lab.servers.values.single.revision, before + 1);
+    pc.dispose();
+  });
+
+  test(
+      'a device far behind receives everything before the queue runs '
+      '(SYNC-03)', () async {
+    await pair();
+    await use('phone');
+    final phone = controller();
+    await phone.start();
+    await phone.idle;
+    final app = await provider();
+    for (var i = 0; i < 150; i++) {
+      await app.addTransaction(expense('t$i', 1));
+    }
+    for (var i = 0; i < 20 && phone.pending > 0; i++) {
+      await (await DBHelper.database)
+          .update('sync_journal', {'next_retry_at': 0});
+      await phone.syncNow();
+    }
+    expect(phone.pending, 0);
+    phone.dispose();
+
+    await use('pc');
+    final pc = controller();
+    int? seen;
+    pc.afterSync =
+        () async => seen ??= (await DBHelper.getTransactions()).length;
+    await pc.start();
+    await pc.idle;
+    expect(seen, 150, reason: 'the queue saw the other device\'s work');
     pc.dispose();
   });
 
