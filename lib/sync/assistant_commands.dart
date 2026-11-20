@@ -360,10 +360,10 @@ class AssistantCommands {
   static double _reais(Object? cents) => (cents as num).toInt() / 100;
 
   Future<(String, Map<String, Object?>)> _apply(AssistantCommand c) async {
+    // Every ledger operation the request commits is collected, so what it
+    // changed can be undone later (from Claude or from the app).
+    final operations = <String>[];
     try {
-      // Every ledger operation the request commits is collected, so what it
-      // changed can be undone later (from Claude or from the app).
-      final operations = <String>[];
       final message = await runZoned(() => _do(c),
           zoneValues: {ledgerOperationsZoneKey: operations});
       final undo =
@@ -371,17 +371,28 @@ class AssistantCommands {
       if (undo != null) message['undo'] = undo;
       if (c.kind == 'settings.set') _reportedAt = null; // report them again
       return ('done', message);
-    } on FormatException catch (e) {
-      return ('rejected', {'reason': e.message});
-    } on ArgumentError catch (e) {
-      return ('rejected', {'reason': '${e.message}'});
-    } on StateError catch (e) {
-      return ('rejected', {'reason': e.message});
     } catch (e) {
-      return (
-        'rejected',
-        {'reason': 'Erro inesperado no app (${e.runtimeType}).'}
-      );
+      final reason = switch (e) {
+        FormatException(:final message) => message,
+        ArgumentError(:final message) => '$message',
+        StateError(:final message) => message,
+        _ => 'Erro inesperado no app (${e.runtimeType}).',
+      };
+      if (operations.isEmpty) return ('rejected', {'reason': reason});
+      // Part of it was saved before the failure (SYNC-11): never "recusado"
+      // with money already moved. Say what stayed, with its undo.
+      final result = <String, Object?>{
+        'partial': true,
+        'reason': reason,
+        'message': 'Feito em parte: o que foi gravado ficou; o resto parou '
+            'aqui: $reason',
+      };
+      try {
+        final undo =
+            await LedgerUndo.capture(await DBHelper.database, operations);
+        if (undo != null) result['undo'] = undo;
+      } catch (_) {}
+      return ('done', result);
     }
   }
 

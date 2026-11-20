@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -1050,6 +1050,28 @@ void main() {
     expect(left.single.amount, 30);
     await app.reloadFromStorage();
     expect(app.lended, isEmpty);
+  });
+
+  test('a request saved in part says so, with its undo (SYNC-11)', () async {
+    // The queue only runs on a synced device: operations are captured.
+    await capture();
+    // The entry is saved, then 121 installments are refused.
+    final (status, result) = await send('transaction.create', {
+      'type': 'expense',
+      'amount_cents': 12100,
+      'description': 'Compra fictícia',
+      'account_id': 'bank',
+      'category_id': 'food_exp',
+      'date': '2026-11-02',
+      'installments': 121,
+    });
+    expect(status, 'done', reason: 'money already moved: not "rejected" $result');
+    expect(result['partial'], true);
+    expect(result['message'] as String, startsWith('Feito em parte'));
+    expect(await balance('bank'), 879);
+    final (undone, _) = await undo(queue.finished.keys.last);
+    expect(undone, 'done');
+    expect(await balance('bank'), 1000, reason: 'the part that stayed undoes');
   });
 
   test('invoice paid on a given day keeps that day', () async {

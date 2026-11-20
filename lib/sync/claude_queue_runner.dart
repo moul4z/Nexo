@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
@@ -71,6 +72,9 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
     final pluggy = PluggyInbox.instance;
     if (headless) {
       if (pluggy == null) return;
+      // Reading the banks can take most of the worker's time: started only
+      // with room left, and cut short so the decisions still go out.
+      if (headlessLeft() < const Duration(seconds: 25)) return;
       final prefs = await SharedPreferences.getInstance();
       final now = DateTime.now().millisecondsSinceEpoch;
       // Once an hour. A clock set back must not block it: a mark in the
@@ -78,7 +82,13 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
       final last = prefs.getInt(_bankPassKey) ?? 0;
       if (last <= now && now - last < 3600000) return;
       await prefs.setInt(_bankPassKey, now);
-      await pluggy.sync();
+      try {
+        await pluggy
+            .sync()
+            .timeout(headlessLeft() - const Duration(seconds: 15));
+      } on TimeoutException {
+        Diagnostics.note('bank pass', 'leitura dos bancos passou do tempo');
+      }
     }
     final started = DateTime.now();
     final state = await InboxReconciler.background(
@@ -98,7 +108,7 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
       await BankNotices.afterPass(state, started: started);
     }
     // The closing price of the day, once, after the B3 closes.
-    if (headless) {
+    if (headless && headlessLeft() > const Duration(seconds: 15)) {
       try {
         await QuoteRefresh.daily(usdFx: provider.fxMicros('USD'));
       } catch (e) {
@@ -111,6 +121,17 @@ Future<void> bankPass(AppProvider provider, {required bool headless}) async {
 }
 
 const _bankPassKey = 'nexo_bank_pass_at_v1';
+
+/// When the headless pass must be done: Android stops the worker at 80 s
+/// (NexoBackground.kt), so the optional parts (reading the banks, the
+/// day's quotes) start only while there is time left (SYNC-09). Null: a
+/// pass with the app open, which has no limit.
+@visibleForTesting
+DateTime? headlessDeadline;
+
+Duration headlessLeft() => headlessDeadline == null
+    ? const Duration(days: 1)
+    : headlessDeadline!.difference(DateTime.now());
 
 /// The app's own engine answers the worker (app alive but not in front).
 Future<QueueCheck> runQueueInApp(String source) async {
@@ -139,6 +160,8 @@ Future<QueueCheck> runQueueInApp(String source) async {
 /// what the assistant asked, sends the result and, when something was
 /// recorded, says so in a notification without amounts.
 Future<QueueCheck> runHeadlessQueue(String source) async {
+  // Counted from here: loading the ledger is part of the worker's time.
+  final started = DateTime.now();
   await DesktopProfile.initialize(const []);
   Intl.defaultLocale = 'pt_BR';
   await initializeDateFormatting('pt_BR');
@@ -162,10 +185,12 @@ Future<QueueCheck> runHeadlessQueue(String source) async {
       real: !DesktopProfile.isTest)!;
   final assistant = wireAssistant(provider, config, background: true);
   _passSource = source;
+  headlessDeadline = started.add(const Duration(seconds: 70));
   try {
     await sync.runOnce();
   } finally {
     _passSource = null;
+    headlessDeadline = null;
   }
   final applied = assistant.handled;
   if (applied > 0 && await ClaudeQueue.notifies()) {
