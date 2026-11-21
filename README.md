@@ -17,6 +17,12 @@ Controle financeiro pessoal para entender o passado, acompanhar o presente e org
 
 </div>
 
+> **In English:** Nexo is a personal finance app for Android and Windows, built with Flutter and Dart.
+> Data lives on the device in SQLite and syncs between phone and PC through a Supabase project you own.
+> Bank transactions arrive read-only through Open Finance (Pluggy) and land in a review inbox; the app only records on its own what leaves no doubt or what a user rule says, and any automatic entry can be undone.
+> An MCP server lets Claude do in the app what the screens do, and its requests show up on an app screen where they can be undone.
+> Developed by Daniel Moulaz on top of the MIT-licensed Expensy 1.1.0, with 100+ Dart test files and offline tests for the server. The rest of this README is in Portuguese.
+
 ## Um painel para o dia a dia
 
 O Nexo reúne saldo, gastos, cartões, dívidas, investimentos e previsão de caixa em uma experiência compartilhada entre Android e Windows. O foco é reduzir trabalho manual sem perder a precisão dos registros.
@@ -173,8 +179,10 @@ Os documentos registram etapas diferentes do desenvolvimento; consulte a data e 
 
 ## Desenvolvimento
 
-O Nexo é desenvolvido por [Daniel Moulaz](https://github.com/moul4z) e foi construído a partir de uma base open source sob licença MIT, o [Expensy](https://github.com/mina-android/Expensy), de Mina Android; os créditos estão em [`LICENSE`](LICENSE).
+O Nexo é desenvolvido por [Daniel Moulaz](https://github.com/moul4z) e foi construído a partir de uma base open source sob licença MIT, o [Expensy](https://github.com/mina-android/Expensy), de Mina Android; os créditos estão em [`LICENSE`](LICENSE) e [`NOTICE`](NOTICE).
 
 Contribuições devem manter testes relevantes, compatibilidade dos dados e migrações explícitas quando necessárias. Nunca inclua bancos pessoais, notificações reais, extratos, PINs, tokens, chaves de serviço, keystores ou arquivos de configuração locais em commits ou issues.
 
 Licença [MIT](LICENSE). A fonte Inter, incluída em `assets/fonts/Inter`, segue a [SIL Open Font License](assets/fonts/Inter/OFL.txt).
+
+Portfólio: [moulaz.dev](https://moulaz.dev) · [English](https://moulaz.dev/en/)
